@@ -1,0 +1,10 @@
+{
+  "name": "tokenvisor-pi",
+  "version": "1.0.0",
+  "description": "TokenVisor custom provider for pi — dynamic model discovery from devstudio.tokenvisor.ai",
+  "keywords": ["pi-package", "pi-extension", "provider", "tokenvisor"],
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "license": "MIT"
+}
