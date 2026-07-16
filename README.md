@@ -21,7 +21,7 @@ Or add to `.pi/settings.json`:
 Under omp:
 
 ```bash
-omp plugins add https://github.com/EmbeddedLLM/tokenvisor-pi
+omp plugin install https://github.com/EmbeddedLLM/tokenvisor-pi
 ```
 
 Or add to `~/.omp/plugins/package.json`:
