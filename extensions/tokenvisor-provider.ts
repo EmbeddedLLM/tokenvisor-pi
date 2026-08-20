@@ -83,7 +83,7 @@ function convertModel(model: TokenVisorModel): ModelSpec {
       ? (["text", "image"] as const)
       : (["text"] as const),
     contextWindow: model.context_length ?? 128000,
-    maxTokens: model.max_output_tokens ?? 16384,
+    maxTokens: model.max_output_tokens ?? (model.context_length ? Math.floor(model.context_length / 2) : 16384),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
 }
