@@ -106,12 +106,6 @@ const ENV_KEY = "TOKENVISOR_API_KEY";
 const DEFAULT_BASE_URL = "https://devstudio.tokenvisor.ai/api/v1";
 const AUTH_PATH = join(homedir(), ".pi", "agent", "auth.json");
 
-export function providerApiKey(apiKey: string | undefined): string {
-  // Pi supports $ENV_VAR references; OMP instead looks up the entire string as
-  // an env-var name. Passing the resolved key works under both hosts.
-  return apiKey ?? ENV_KEY;
-}
-
 interface TokenVisorModel {
   id: string;
   name: string;
@@ -660,7 +654,9 @@ export default async function (pi: ExtensionAPI) {
   const providerConfig: ProviderConfig = {
     name: "TokenVisor",
     baseUrl,
-    apiKey: providerApiKey(apiKey),
+    // Pi expands $ENV_VAR references while OMP treats the whole string as a
+    // variable name, so pass an available resolved key literally.
+    apiKey: apiKey ?? ENV_KEY,
     api: captureActive ? CAPTURE_API : "openai-completions",
     authHeader: true,
     models,
