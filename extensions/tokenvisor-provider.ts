@@ -89,15 +89,20 @@ import {
 import {
   createOmpEnvelope,
   createOmpSequenceState,
+  commitPendingOmpTaskResultConsumers,
   deriveOmpSessionLineage,
   getOmpRuntimeCaptureState,
+  makeOmpTaskResultConsumptionRecord,
   OMP_RUN_COMPLETION_ENTRY,
+  OMP_TASK_RESULT_CONSUMPTION_ENTRY,
   pendingOmpCompactionDependencies,
   recordOmpSequenceResult,
   recordOmpSequenceStream,
   readOmpForkBoundaryIndex,
   readOmpTaskDelegation,
   readOmpTaskResultDependencies,
+  resolveOmpPeerWakeDependencies,
+  type OmpTaskResultReference,
   recordOmpCompactionResponse,
   resolveOmpNativeSequence,
 } from "../src/capture/omp.ts";
@@ -403,6 +408,8 @@ export default async function (pi: ExtensionAPI) {
   const compactionPriorStreams = ompCaptureState?.compactionPriorStreams ?? new Map<string, string[] | null>();
   const compactionConsumedRunIds = new Map<string, string[]>();
   const compactionRunIdsByStream = new Map<string, string[]>();
+  const compactionTaskResultReferences = ompCaptureState?.compactionTaskResultReferences ?? new Map<string, OmpTaskResultReference[]>();
+  const ompTaskResultReferencesByStream = ompCaptureState?.taskResultReferencesByStream ?? new Map<string, { sessionId: string; references: OmpTaskResultReference[] }>();
   const piRequestMetadataByStream = new Map<string, string>();
   const ompDependenciesBySession = ompCaptureState?.compactionDependencies ?? new Map<string, AgentMetadata["depends_on"]>();
   const ompLineageBySession = ompCaptureState?.lineageBySession ?? new Map<string, {
@@ -462,6 +469,7 @@ export default async function (pi: ExtensionAPI) {
           : null,
       });
       ompBranchReaders.set(sessionId, () => ctx.sessionManager.getBranch());
+      ompCaptureState?.appendEntryBySession.set(sessionId, (customType, data) => pi.appendEntry(customType, data));
       ompSequenceBySession.set(sessionId, createOmpSequenceState());
       const nativeSessionFile = ctx.sessionManager.getSessionFile?.();
       if (nativeSessionFile) ompSessionFiles.set(sessionId, nativeSessionFile);
@@ -478,6 +486,8 @@ export default async function (pi: ExtensionAPI) {
       ompLineageBySession.delete(sessionId);
       ompBranchReaders.delete(sessionId);
       ompSessionFiles.delete(sessionId);
+      ompCaptureState?.appendEntryBySession.delete(sessionId);
+      compactionTaskResultReferences.delete(sessionId);
       ompSequenceBySession.delete(sessionId);
       ompDependenciesBySession.delete(sessionId);
       compactionConsumedRunIds.delete(sessionId);
@@ -485,6 +495,23 @@ export default async function (pi: ExtensionAPI) {
       compactionCaptureActive.delete(sessionId);
       compactionStreamFailures.delete(sessionId);
       compactionPriorStreams.delete(sessionId);
+      ompCaptureState?.pendingTaskResultConsumptions.delete(sessionId);
+      for (const [streamId, capture] of ompTaskResultReferencesByStream) {
+        if (capture.sessionId === sessionId) ompTaskResultReferencesByStream.delete(streamId);
+      }
+    });
+    if (runtimeHost === "omp") captureHandler.on("agent_end", (_event: any, ctx) => {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const pending = ompCaptureState?.pendingTaskResultConsumptions.get(sessionId);
+      if (!pending?.size) return;
+      commitPendingOmpTaskResultConsumers(
+        sessionId,
+        ctx.sessionManager.getBranch(),
+        pending,
+        ompCaptureState?.appendEntryBySession.get(sessionId),
+        () => ctx.sessionManager.getBranch(),
+      );
+      if (pending.size === 0) ompCaptureState?.pendingTaskResultConsumptions.delete(sessionId);
     });
     if (runtimeHost === "omp") captureHandler.on("agent_end", (event: any, ctx) => {
       const sessionId = ctx.sessionManager.getSessionId();
@@ -548,6 +575,7 @@ export default async function (pi: ExtensionAPI) {
       const sessionId = ctx.sessionManager.getSessionId();
       const committedCompactionEntryId = latestNativeCompactionId(ctx.sessionManager.getBranch());
       if (!committedCompactionEntryId) {
+        compactionTaskResultReferences.delete(sessionId);
         appendMetadataDiagnostic(capturePath, {
           session_id: `pi:session:${sessionId}`,
           status: "compaction_commit_unavailable",
@@ -579,6 +607,18 @@ export default async function (pi: ExtensionAPI) {
         available ? contributors.map((stream_id) => ({ session_id: `omp:session:${sessionId}`, stream_id })) : null,
       );
       compactionConsumedRunIds.set(sessionId, available ? currentConsumedRuns : []);
+      const consumedTaskResultReferences = compactionTaskResultReferences.get(sessionId) ?? [];
+      compactionTaskResultReferences.delete(sessionId);
+      if (available && consumedTaskResultReferences.length > 0) {
+        const branch = ctx.sessionManager.getBranch();
+        const record = makeOmpTaskResultConsumptionRecord(
+          branch,
+          sessionId,
+          { type: "compaction", id: committedCompactionEntryId },
+          consumedTaskResultReferences,
+        );
+        if (record) ompCaptureState?.appendEntryBySession.get(sessionId)?.(OMP_TASK_RESULT_CONSUMPTION_ENTRY, record);
+      }
       appendMetadataDiagnostic(capturePath, {
         session_id: `${runtimeHost}:session:${sessionId}`,
         compaction_entry_id: committedCompactionEntryId,
@@ -593,6 +633,7 @@ export default async function (pi: ExtensionAPI) {
       compactionStreamFailures.delete(sessionId);
       compactionPriorStreams.delete(sessionId);
       compactionConsumedRunIds.delete(sessionId);
+      compactionTaskResultReferences.delete(sessionId);
     });
     if (runtimeHost === "pi") captureHandler.on("before_provider_headers", (event, ctx) => {
       const headers = event.headers;
@@ -675,6 +716,7 @@ export default async function (pi: ExtensionAPI) {
       let ompSequenceState: ReturnType<typeof createOmpSequenceState> | undefined;
       let ompSequenceAnchorId: string | null = null;
       let ompNativeSequence: { previousResponseId: string | null; hasPriorHistory: boolean } | undefined;
+      let ompTaskResultReferences: OmpTaskResultReference[] | undefined;
       if (runtimeHost === "pi") {
         const reservedHeader = headerValue(options?.headers) ?? headerValue(model.headers);
         const claim = claimFreshRequestMetadata(piRequestMetadataByStream, reservedHeader);
@@ -696,12 +738,27 @@ export default async function (pi: ExtensionAPI) {
           : [];
         const branchReader = ompBranchReaders.get(options.sessionId);
         const sessionFile = ompSessionFiles.get(options.sessionId);
-        let ompMessages = (context as { messages?: Array<{ role?: string; responseId?: string }> }).messages;
+        const effectiveMessages = (context as { messages?: Array<Record<string, any>> }).messages ?? [];
+        let ompMessages = effectiveMessages;
         const lineage = ompLineageBySession.get(options.sessionId);
         if (branchReader) {
           const fullBranch = branchReader();
           const forkBoundary = readOmpForkBoundaryIndex(fullBranch, options.sessionId);
-          const branch = forkBoundary === null ? fullBranch : fullBranch.slice(forkBoundary + 1);
+          let branch = forkBoundary === null ? fullBranch : fullBranch.slice(forkBoundary + 1);
+          const pendingConsumptions = ompCaptureState?.pendingTaskResultConsumptions.get(options.sessionId);
+          if (pendingConsumptions?.size) {
+            branch = commitPendingOmpTaskResultConsumers(
+              options.sessionId,
+              branch,
+              pendingConsumptions,
+              ompCaptureState?.appendEntryBySession.get(options.sessionId),
+              branchReader,
+            );
+            if (pendingConsumptions.size === 0) ompCaptureState?.pendingTaskResultConsumptions.delete(options.sessionId);
+            const committedBranch = branchReader();
+            const committedForkBoundary = readOmpForkBoundaryIndex(committedBranch, options.sessionId);
+            branch = committedForkBoundary === null ? committedBranch : committedBranch.slice(committedForkBoundary + 1);
+          }
           ompSequenceState = ompSequenceBySession.get(options.sessionId);
           if (ompSequenceState) {
             const lineageKey = lineage
@@ -719,7 +776,10 @@ export default async function (pi: ExtensionAPI) {
           const fullBranch = branchReader();
           const forkBoundary = readOmpForkBoundaryIndex(fullBranch, options.sessionId);
           const branch = forkBoundary === null ? fullBranch : fullBranch.slice(forkBoundary + 1);
-          dependencies = pendingOmpCompactionDependencies(branch, dependencies);
+          dependencies = pendingOmpCompactionDependencies(
+            branch,
+            resolveOmpPeerWakeDependencies(branch, dependencies),
+          );
           if (dependencies !== null && compactionCaptureActive.has(options.sessionId)) {
             dependencies = [
               ...dependencies,
@@ -733,7 +793,7 @@ export default async function (pi: ExtensionAPI) {
             sessionFile,
             options.sessionId,
             branch,
-            compactionConsumedRunIds.get(options.sessionId) ?? [],
+            effectiveMessages,
           );
           dependencies = result === null || dependencies === null ? null : [...dependencies, ...result.dependencies];
           if (forkBoundary !== null) {
@@ -741,9 +801,7 @@ export default async function (pi: ExtensionAPI) {
               .filter((entry) => entry.type === "message")
               .map((entry) => entry.message ?? {});
           }
-          if (compactionCaptureActive.has(options.sessionId) && result) {
-            compactionRunIdsByStream.set(streamId, result.runIds);
-          }
+          if (result && dependencies !== null && result.references.length > 0) ompTaskResultReferences = result.references;
         }
         if (!lineage || (lineage.parentSessionId && !lineage.delegation) || (!lineage.parentSessionId && lineage.rootSessionId !== options.sessionId)) {
           appendMetadataDiagnostic(capturePath, {
@@ -790,6 +848,9 @@ export default async function (pi: ExtensionAPI) {
       if (runtimeHost === "omp" && ompSequenceState) {
         recordOmpSequenceStream(ompSequenceState, metadata.stream_id, ompSequenceAnchorId);
       }
+      if (runtimeHost === "omp" && ompTaskResultReferences?.length) {
+        ompTaskResultReferencesByStream.set(metadata.stream_id, { sessionId: options?.sessionId ?? "", references: ompTaskResultReferences });
+      }
       const stream = delegate(streamModel, context, streamOptions);
       return observeCaptureResult(stream, streamContext, capturePath, runtimeHost!, (streamId, responseId, stopReason, content) => {
         if (runtimeHost === "omp" && ompSequenceState) {
@@ -803,8 +864,15 @@ export default async function (pi: ExtensionAPI) {
             const disposition = recordOmpCompactionResponse(values, streamId, responseId, stopReason, content);
             if (disposition === "unusable") compactionStreamFailures.add(sessionKey);
             if (disposition === "contributor") {
-              const consumed = compactionConsumedRunIds.get(sessionKey) ?? [];
-              compactionConsumedRunIds.set(sessionKey, [...new Set([...consumed, ...(compactionRunIdsByStream.get(streamId) ?? [])])]);
+              const consumedReferences = compactionTaskResultReferences.get(sessionKey) ?? [];
+              const nextReferences = [...consumedReferences, ...(ompTaskResultReferencesByStream.get(streamId)?.references ?? [])];
+              const uniqueReferences = [...new Map(nextReferences.map((reference) => [JSON.stringify([reference.sessionId, reference.responseId]), reference])).values()];
+              if (uniqueReferences.length > 8) {
+                compactionTaskResultReferences.delete(sessionKey);
+                compactionStreamFailures.add(sessionKey);
+              } else {
+                compactionTaskResultReferences.set(sessionKey, uniqueReferences);
+              }
             }
           } else if (!responseId || stopReason !== "stop") {
             compactionStreamFailures.add(sessionKey);
@@ -814,6 +882,24 @@ export default async function (pi: ExtensionAPI) {
             compactionConsumedRunIds.set(sessionKey, [...new Set([...consumed, ...(compactionRunIdsByStream.get(streamId) ?? [])])]);
           }
         }
+        if (runtimeHost === "omp" && responseId) {
+          const references = ompTaskResultReferencesByStream.get(streamId)?.references;
+          if (references?.length && !compactionCaptureActive.has(sessionKey)) {
+            const pending = ompCaptureState?.pendingTaskResultConsumptions.get(sessionKey) ?? new Map<string, OmpTaskResultReference[]>();
+            if (pending.size < 16) {
+              pending.set(responseId, references);
+              ompCaptureState?.pendingTaskResultConsumptions.set(sessionKey, pending);
+            } else {
+              pending.clear();
+              ompCaptureState?.pendingTaskResultConsumptions.delete(sessionKey);
+              appendMetadataDiagnostic(capturePath, {
+                session_id: `omp:session:${sessionKey}`,
+                status: "task_result_consumption_overflow",
+              });
+            }
+          }
+        }
+        ompTaskResultReferencesByStream.delete(streamId);
         compactionRunIdsByStream.delete(streamId);
       });
     };

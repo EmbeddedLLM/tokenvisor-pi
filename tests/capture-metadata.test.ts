@@ -32,10 +32,15 @@ import {
 import {
   createOmpEnvelope,
   createOmpSequenceState,
+  commitPendingOmpTaskResultConsumers,
+  getOmpRuntimeCaptureState,
   deriveOmpIdentity,
   deriveOmpSessionLineage,
+  resolveOmpPeerWakeDependencies,
   pendingOmpCompactionDependencies,
   readOmpForkBoundaryIndex,
+  makeOmpTaskResultConsumptionRecord,
+  OMP_TASK_RESULT_CONSUMPTION_ENTRY,
   readOmpTaskDelegation,
   readOmpTaskResultDependencies,
   OMP_RUN_COMPLETION_ENTRY,
@@ -1009,35 +1014,194 @@ describe("shared agent metadata", () => {
     });
   });
 
-  test("binds an OMP wait result to the durable terminal child response", () => {
-    const parentFile = join(nativeFixtureRoot, `${ids.root}.jsonl`);
-    const childFile = join(nativeFixtureRoot, ids.root, "TaskA.jsonl");
-    mkdirSync(join(nativeFixtureRoot, ids.root), { recursive: true });
-    writeFileSync(parentFile, `${JSON.stringify({ type: "session", id: ids.root })}\n`);
-    writeFileSync(childFile, [
-      JSON.stringify({ type: "title", title: "child" }),
-      JSON.stringify({ type: "session", id: ids.child, parentSession: parentFile }),
-      JSON.stringify({ type: "message", message: { role: "assistant", stopReason: "stop", responseId: ids.previous } }),
-      JSON.stringify({ type: "custom", customType: OMP_RUN_COMPLETION_ENTRY, data: {
-        parentSessionId: ids.root, sessionId: ids.child, responseId: ids.previous,
-      } }),
-    ].join("\n"));
-    const branch = [
-      { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "task-call" }] } },
-      { type: "message", message: { role: "toolResult", toolCallId: "task-call", details: { progress: [{ id: "TaskA", agent: "task" }] } } },
-      { type: "message", message: { role: "toolResult", details: { jobs: [{ id: "TaskA", type: "task", status: "completed" }] } } },
-    ];
-    expect(readOmpTaskResultDependencies(parentFile, ids.root, branch)).toEqual({
-      dependencies: [{ session_id: `omp:session:${ids.child}`, response_id: ids.previous, run_id: "omp:task:TaskA" }],
-      runIds: ["omp:task:TaskA"],
+  test("binds chronological OMP result deliveries to exact child responses and committed consumers", () => {
+    const human = JSON.parse(readFileSync(new URL("./fixtures/omp-human-followup.json", import.meta.url), "utf8")) as any;
+    const rootSessionId = human.provenance.identityAliases.rootSession as string;
+    const childSessionId = human.provenance.identityAliases.childSession as string;
+    const stableAgentId = human.provenance.identityAliases.agentUrlId as string;
+    const [firstSnapshot, followupSnapshot] = human.snapshots as any[];
+    const parentFile = join(nativeFixtureRoot, `${rootSessionId}.jsonl`);
+    const childFile = join(nativeFixtureRoot, rootSessionId, `${stableAgentId}.jsonl`);
+    mkdirSync(dirname(childFile), { recursive: true });
+    writeFileSync(parentFile, `${JSON.stringify({ type: "session", id: rootSessionId })}\n`);
+    const writeChildPrefix = (entries: Array<Record<string, any>>) => {
+      const nativeEntries = entries.map((entry) => entry.type === "session"
+        ? { ...entry, parentSession: parentFile }
+        : entry);
+      writeFileSync(childFile, `${nativeEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    };
+    const effectiveMessages = (branch: Array<Record<string, any>>) => branch.flatMap((entry) => {
+      if (entry.type === "message") return [entry.message];
+      if (entry.type === "custom_message") return [{ role: "developer", content: entry.content, attribution: entry.attribution, timestamp: entry.timestamp }];
+      return [];
     });
-    expect(readOmpTaskResultDependencies(parentFile, ids.root, [
-      ...branch,
-      { type: "message", message: { role: "assistant", responseId: "parent-consumed" } },
-    ])).toEqual({ dependencies: [], runIds: [] });
-    expect(readOmpTaskResultDependencies(join(nativeFixtureRoot, "missing-parent.jsonl"), ids.root, [
-      { type: "message", message: { role: "assistant", responseId: "no-task-results" } },
-    ])).toEqual({ dependencies: [], runIds: [] });
+
+    const firstBranch = firstSnapshot.nativeBranch as Array<Record<string, any>>;
+    writeChildPrefix(firstSnapshot.nativeChildFilePrefix);
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, [])).toBeNull();
+    const duplicateDeliveryInput = effectiveMessages(firstBranch);
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, [
+      ...duplicateDeliveryInput,
+      { ...duplicateDeliveryInput.at(-1), details: { op: "wait", jobs: [] } },
+    ])).toBeNull();
+    const first = readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, effectiveMessages(firstBranch));
+    expect(first).toEqual({
+      dependencies: [{
+        session_id: `omp:session:${childSessionId}`,
+        response_id: firstSnapshot.expectedDependency.responseId,
+        run_id: firstSnapshot.expectedDependency.runId,
+      }],
+      references: [{
+        sessionId: childSessionId,
+        responseId: firstSnapshot.expectedDependency.responseId,
+        runId: firstSnapshot.expectedDependency.runId,
+        deliveryId: "parent-entry-18",
+        jobId: human.nativeFacts.waitJobs[0].id,
+      }],
+    });
+
+    const firstConsumerEntry = firstSnapshot.nativeConsumerEntry;
+    const committedFirst = [...firstBranch, firstConsumerEntry];
+    const consumerResponseA = firstConsumerEntry.message.responseId as string;
+    const pendingA = new Map([[consumerResponseA, first!.references]]);
+    const parentEntries: Array<Record<string, unknown>> = [];
+    const childEntries: Array<Record<string, unknown>> = [];
+    const readCommittedParent = () => [...committedFirst, ...parentEntries];
+    const captureState = getOmpRuntimeCaptureState();
+    captureState.appendEntryBySession.set(rootSessionId, (customType, data) => parentEntries.push({ type: "custom", customType, data }));
+    captureState.appendEntryBySession.set(childSessionId, (customType, data) => childEntries.push({ type: "custom", customType, data }));
+    let persistedFirst: Array<Record<string, any>>;
+    try {
+      persistedFirst = commitPendingOmpTaskResultConsumers(
+        rootSessionId,
+        committedFirst,
+        pendingA,
+        captureState.appendEntryBySession.get(rootSessionId),
+        readCommittedParent,
+      );
+    } finally {
+      captureState.appendEntryBySession.delete(rootSessionId);
+      captureState.appendEntryBySession.delete(childSessionId);
+    }
+    expect(pendingA.size).toBe(0);
+    expect(childEntries).toEqual([]);
+    expect(persistedFirst.at(-1)?.data).toMatchObject({
+      consumer: { type: "assistant", id: consumerResponseA },
+      references: first!.references,
+    });
+
+    const followupBranch = followupSnapshot.nativeBranch as Array<Record<string, any>>;
+    const consumerAIndex = followupBranch.findIndex((entry) => entry.id === firstConsumerEntry.id);
+    expect(consumerAIndex).toBeGreaterThanOrEqual(0);
+    const branchWithConsumedA = [
+      ...followupBranch.slice(0, consumerAIndex + 1),
+      persistedFirst.at(-1)!,
+      ...followupBranch.slice(consumerAIndex + 1),
+    ];
+    writeChildPrefix(followupSnapshot.nativeChildFilePrefix);
+    const followup = readOmpTaskResultDependencies(parentFile, rootSessionId, branchWithConsumedA, effectiveMessages(branchWithConsumedA));
+    expect(followup).toEqual({
+      dependencies: [{
+        session_id: `omp:session:${childSessionId}`,
+        response_id: followupSnapshot.expectedDependency.responseId,
+        run_id: followupSnapshot.expectedDependency.runId,
+      }],
+      references: [{
+        sessionId: childSessionId,
+        responseId: followupSnapshot.expectedDependency.responseId,
+        runId: followupSnapshot.expectedDependency.runId,
+        deliveryId: "parent-entry-26",
+        jobId: human.nativeFacts.waitJobs[1].id,
+      }],
+    });
+
+    // OMP can reuse the bare job ID after eviction; the delivery and response
+    // identities still distinguish this follow-up from the consumed result.
+    const reusedJobBranch = branchWithConsumedA.map((entry) => entry.id === "parent-entry-26"
+      ? {
+          ...entry,
+          message: {
+            ...entry.message,
+            details: {
+              ...entry.message.details,
+              jobs: entry.message.details.jobs.map((job: Record<string, unknown>) => ({ ...job, id: stableAgentId })),
+            },
+          },
+        }
+      : entry);
+    const reusedJobResult = readOmpTaskResultDependencies(parentFile, rootSessionId, reusedJobBranch, effectiveMessages(reusedJobBranch));
+    expect(reusedJobResult?.dependencies).toEqual(followup?.dependencies);
+    expect(reusedJobResult?.references).toEqual([{ ...followup!.references[0], jobId: stableAgentId }]);
+
+    writeChildPrefix(firstSnapshot.nativeChildFilePrefix);
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, branchWithConsumedA, effectiveMessages(branchWithConsumedA))).toBeNull();
+    writeChildPrefix(followupSnapshot.nativeChildFilePrefix);
+
+    const statusOnlyBranch = followupBranch.map((entry) => {
+      if (entry.id !== "parent-entry-26") return entry;
+      const message = {
+        ...entry.message,
+        details: { ...entry.message.details, op: "jobs", jobs: entry.message.details.jobs.map((job: any) => ({ ...job })) },
+      };
+      delete message.details.jobs[0].resultText;
+      return { ...entry, message };
+    });
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, statusOnlyBranch, effectiveMessages(statusOnlyBranch))).toEqual({
+      dependencies: [],
+      references: [],
+    });
+    const waitWithoutPayloadBranch = followupBranch.map((entry) => {
+      if (entry.id !== "parent-entry-26") return entry;
+      const message = {
+        ...entry.message,
+        details: { ...entry.message.details, op: "wait", jobs: entry.message.details.jobs.map((job: any) => ({ ...job })) },
+      };
+      delete message.details.jobs[0].resultText;
+      delete message.details.jobs[0].structured;
+      return { ...entry, message };
+    });
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, waitWithoutPayloadBranch, effectiveMessages(waitWithoutPayloadBranch))).toEqual({
+      dependencies: [],
+      references: [],
+    });
+
+    const asyncDeliveryBranch = branchWithConsumedA.map((entry) => entry.id === "parent-entry-26"
+      ? {
+          type: "custom_message",
+          id: "async-delivery-B",
+          customType: "async-result",
+          details: { jobs: [{ jobId: "CompulsoryMoose-2", type: "task", status: "completed", agentId: stableAgentId }] },
+        }
+      : entry);
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, asyncDeliveryBranch, effectiveMessages(asyncDeliveryBranch))).toBeNull();
+
+    const compactedA = [...firstBranch, { type: "compaction", id: "mechanical-compaction-A" }];
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, compactedA, [])).toBeNull();
+    const compactionMarkerA = makeOmpTaskResultConsumptionRecord(
+      compactedA,
+      rootSessionId,
+      { type: "compaction", id: "mechanical-compaction-A" },
+      first!.references,
+    );
+    expect(compactionMarkerA).not.toBeNull();
+    const branchAfterCompactionA = [
+      ...compactedA,
+      { type: "custom", customType: OMP_TASK_RESULT_CONSUMPTION_ENTRY, data: compactionMarkerA },
+    ];
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, branchAfterCompactionA, effectiveMessages(branchAfterCompactionA))).toEqual({
+      dependencies: [],
+      references: [],
+    });
+    expect(pendingOmpCompactionDependencies([
+      ...branchAfterCompactionA,
+      { type: "message", message: { role: "assistant", responseId: "mechanical-continuation" } },
+    ], [{ session_id: `omp:session:${rootSessionId}`, stream_id: "pending-summary" }])).toEqual([]);
+
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, [])).toBeNull();
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, effectiveMessages(firstBranch))).toBeNull();
+    const pendingBeforeCommit = new Map([["not-committed", first!.references]]);
+    commitPendingOmpTaskResultConsumers(rootSessionId, firstBranch, pendingBeforeCommit, () => {}, () => firstBranch);
+    expect(pendingBeforeCommit.size).toBe(1);
   });
 
   test("exposes compaction refs for one consumer frontier and scopes resumed forks", () => {
@@ -1063,5 +1227,17 @@ describe("shared agent metadata", () => {
     }, ids.stream, refs);
     expect(later?.previousResponseId).toBe("fork-response");
     expect(later?.dependsOn).toEqual(refs);
+  });
+
+  test("keeps unsupported native peer-wake causality unknown", () => {
+    const branch = [
+      { type: "message", message: { role: "assistant", responseId: "prior-response" } },
+      { type: "custom_message", id: "opaque-message-id", customType: "irc:incoming", details: { from: "peer" } },
+    ];
+    expect(resolveOmpPeerWakeDependencies(branch, [])).toBeNull();
+    expect(resolveOmpPeerWakeDependencies([...branch, { type: "compaction", id: "mechanical" }], [])).toBeNull();
+    expect(resolveOmpPeerWakeDependencies([...branch, { type: "message", message: { role: "assistant", stopReason: "error" } }], [])).toBeNull();
+    expect(resolveOmpPeerWakeDependencies([...branch, { type: "message", message: { role: "assistant", responseId: "wake-response" } }], [])).toEqual([]);
+    expect(pendingOmpCompactionDependencies([{ type: "compaction", id: "mechanical" }], null)).toBeNull();
   });
 });

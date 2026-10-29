@@ -6,6 +6,7 @@ import { dirname, join, basename } from "path";
 export const OMP_EXTENSION_VERSION = "1.1.0-dev";
 export const OMP_RUNNER_VERSION = "18.12.6";
 export const OMP_RUN_COMPLETION_ENTRY = "tokenvisor-agent-run-completion-v1";
+export const OMP_TASK_RESULT_CONSUMPTION_ENTRY = "tokenvisor-agent-task-result-consumption-v1";
 const PI_FORK_ROOT_ENTRY = "tokenvisor-agent-fork-root-v1";
 
 export type OmpCompactionResponseDisposition = "contributor" | "empty" | "unusable";
@@ -209,7 +210,166 @@ export interface OmpRuntimeCaptureState {
   compactionDependencies: Map<string, AgentMetadata["depends_on"]>;
   branchReaders: Map<string, () => Array<Record<string, any>>>;
   sessionFiles: Map<string, string>;
+  appendEntryBySession: Map<string, (customType: string, data?: unknown) => void>;
   sequenceBySession: Map<string, OmpSequenceState>;
+  pendingTaskResultConsumptions: Map<string, Map<string, OmpTaskResultReference[]>>;
+  compactionTaskResultReferences: Map<string, OmpTaskResultReference[]>;
+  taskResultReferencesByStream: Map<string, OmpTaskResultStreamReferences>;
+}
+
+export interface OmpTaskResultReference {
+  sessionId: string;
+  responseId: string;
+  runId: string;
+  deliveryId: string;
+  jobId: string;
+}
+
+export interface OmpTaskResultStreamReferences {
+  sessionId: string;
+  references: OmpTaskResultReference[];
+}
+
+interface OmpTaskResultCompletion {
+  sessionId: string;
+  responseId: string;
+  runId: string;
+}
+
+type OmpTaskResultConsumer = { type: "assistant" | "compaction"; id: string };
+
+function taskResultReferenceKey(reference: Pick<OmpTaskResultReference, "sessionId" | "responseId">): string {
+  return JSON.stringify([reference.sessionId, reference.responseId]);
+}
+
+/** Build a consumption marker only for a consumer already committed to the native branch. */
+export function makeOmpTaskResultConsumptionRecord(
+  branch: Array<Record<string, any>>,
+  parentSessionId: string,
+  consumer: OmpTaskResultConsumer,
+  references: readonly OmpTaskResultReference[],
+): Record<string, unknown> | null {
+  if (!isNativeId(parentSessionId) || !isNativeId(consumer.id) || references.length === 0 || references.length > 8) return null;
+  const consumerIndexes = branch.flatMap((entry, index) => {
+    const message = entry.message && typeof entry.message === "object" ? entry.message : entry;
+    if (consumer.type === "assistant") {
+      return message.role === "assistant" && message.responseId === consumer.id ? [index] : [];
+    }
+    return entry.type === "compaction" && entry.id === consumer.id ? [index] : [];
+  });
+  if (consumerIndexes.length !== 1) return null;
+  const seen = new Set<string>();
+  const refs: OmpTaskResultReference[] = [];
+  for (const reference of references) {
+    if (!isNativeId(reference.sessionId) || !isNativeId(reference.responseId) || !isNativeId(reference.runId) ||
+      !isNativeId(reference.deliveryId) || !isNativeId(reference.jobId)) return null;
+    const key = taskResultReferenceKey(reference);
+    if (seen.has(key)) return null;
+    seen.add(key);
+    refs.push({ ...reference });
+  }
+  return {
+    version: 1,
+    parentSessionId,
+    consumer,
+    references: refs,
+  };
+}
+
+function hasCommittedOmpTaskResultConsumer(
+  branch: Array<Record<string, any>>,
+  consumerId: string,
+  references: readonly OmpTaskResultReference[],
+): boolean {
+  return branch.some((entry) => {
+    const data = entry.customType === OMP_TASK_RESULT_CONSUMPTION_ENTRY && entry.data && typeof entry.data === "object"
+      ? entry.data as Record<string, any>
+      : null;
+    if (data?.version !== 1 || data.consumer?.type !== "assistant" || data.consumer.id !== consumerId || !Array.isArray(data.references)) return false;
+    const recorded = new Set(data.references.map((reference: any) => JSON.stringify([
+      reference?.sessionId,
+      reference?.responseId,
+      reference?.runId,
+      reference?.deliveryId,
+      reference?.jobId,
+    ])));
+    return references.every((reference) => recorded.has(JSON.stringify([
+      reference.sessionId,
+      reference.responseId,
+      reference.runId,
+      reference.deliveryId,
+      reference.jobId,
+    ])));
+  });
+}
+
+/** Persist consumption only after the exact parent response is present in its owning native branch. */
+export function commitPendingOmpTaskResultConsumers(
+  sessionId: string,
+  branch: Array<Record<string, any>>,
+  pending: Map<string, OmpTaskResultReference[]>,
+  appendEntry: ((customType: string, data?: unknown) => void) | undefined,
+  readBranch: () => Array<Record<string, any>>,
+): Array<Record<string, any>> {
+  if (!appendEntry) return branch;
+  for (const [responseId, references] of pending) {
+    if (hasCommittedOmpTaskResultConsumer(branch, responseId, references)) {
+      pending.delete(responseId);
+      continue;
+    }
+    const record = makeOmpTaskResultConsumptionRecord(
+      branch,
+      sessionId,
+      { type: "assistant", id: responseId },
+      references,
+    );
+    if (!record) continue;
+    appendEntry(OMP_TASK_RESULT_CONSUMPTION_ENTRY, record);
+    const committedBranch = readBranch();
+    if (hasCommittedOmpTaskResultConsumer(committedBranch, responseId, references)) pending.delete(responseId);
+    branch = committedBranch;
+  }
+  return branch;
+}
+
+/** Read only response-specific consumption markers whose consumer is committed in this branch. */
+export function readOmpConsumedTaskResultReferences(
+  branch: Array<Record<string, any>>,
+  parentSessionId: string,
+): { references: Set<string>; deliveryIds: Set<string> } | null {
+  const references = new Set<string>();
+  const deliveryIds = new Set<string>();
+  const consumerKeys = new Set<string>();
+  for (let recordIndex = 0; recordIndex < branch.length; recordIndex += 1) {
+    const entry = branch[recordIndex];
+    if (entry.customType !== OMP_TASK_RESULT_CONSUMPTION_ENTRY) continue;
+    const data = entry.data && typeof entry.data === "object" ? entry.data as Record<string, any> : null;
+    if (!data || data.parentSessionId !== parentSessionId) continue;
+    if (data.version !== 1 || !data.consumer || !["assistant", "compaction"].includes(data.consumer.type) ||
+      !isNativeId(data.consumer.id) || !Array.isArray(data.references) || data.references.length === 0 || data.references.length > 8) return null;
+    const consumerKey = JSON.stringify([data.consumer.type, data.consumer.id]);
+    if (consumerKeys.has(consumerKey)) return null;
+    consumerKeys.add(consumerKey);
+    const consumerIndexes = branch.flatMap((candidate, index) => {
+      const message = candidate.message && typeof candidate.message === "object" ? candidate.message : candidate;
+      if (data.consumer.type === "assistant") {
+        return message.role === "assistant" && message.responseId === data.consumer.id ? [index] : [];
+      }
+      return candidate.type === "compaction" && candidate.id === data.consumer.id ? [index] : [];
+    });
+    if (consumerIndexes.length !== 1 || consumerIndexes[0] >= recordIndex) return null;
+    const refsSeen = new Set<string>();
+    for (const reference of data.references) {
+      if (!reference || !isNativeId(reference.sessionId) || !isNativeId(reference.responseId) || !isNativeId(reference.runId)) return null;
+      if (!isNativeId(reference.deliveryId) || !isNativeId(reference.jobId)) return null;
+      const key = taskResultReferenceKey(reference);
+      if (refsSeen.has(key)) return null;
+      refsSeen.add(key);
+      references.add(key);
+      deliveryIds.add(reference.deliveryId);
+    }
+  }
+  return { references, deliveryIds };
 }
 
 const OMP_LINEAGE_STATE = Symbol.for("tokenvisor-pi.agent-capture.omp-lineage.v1");
@@ -226,9 +386,17 @@ export function getOmpRuntimeCaptureState(): OmpRuntimeCaptureState {
     compactionDependencies: new Map(),
     branchReaders: new Map(),
     sessionFiles: new Map(),
+    appendEntryBySession: new Map(),
     sequenceBySession: new Map(),
+    pendingTaskResultConsumptions: new Map(),
+    compactionTaskResultReferences: new Map(),
+    taskResultReferencesByStream: new Map(),
   } satisfies OmpRuntimeCaptureState;
   runtime[OMP_LINEAGE_STATE].sequenceBySession ??= new Map();
+  runtime[OMP_LINEAGE_STATE].pendingTaskResultConsumptions ??= new Map();
+  runtime[OMP_LINEAGE_STATE].appendEntryBySession ??= new Map();
+  runtime[OMP_LINEAGE_STATE].compactionTaskResultReferences ??= new Map();
+  runtime[OMP_LINEAGE_STATE].taskResultReferencesByStream ??= new Map();
   return runtime[OMP_LINEAGE_STATE] as OmpRuntimeCaptureState;
 }
 
@@ -236,12 +404,10 @@ export function readOmpTaskResultDependencies(
   parentSessionFile: string | undefined,
   parentSessionId: string,
   branch: Array<Record<string, any>>,
-  consumedRunIds: readonly string[] = [],
-): { dependencies: NonNullable<AgentMetadata["depends_on"]>; runIds: string[] } | null {
+  effectiveMessages: Array<Record<string, any>> = [],
+): { dependencies: NonNullable<AgentMetadata["depends_on"]>; references: OmpTaskResultReference[] } | null {
   const calls: string[] = [];
   const pendingTaskCalls = new Map<string, string[]>();
-  const completedJobs = new Set<string>();
-  const alreadyConsumed = new Set(consumedRunIds);
   let lastAssistantIndex = -1;
   for (let index = 0; index < branch.length; index += 1) {
     const raw = branch[index];
@@ -260,36 +426,77 @@ export function readOmpTaskResultDependencies(
     if (message.role !== "toolResult" && message.role !== "tool_result") continue;
     const details = message.details;
     for (const progress of Array.isArray(details?.progress) ? details.progress : []) {
-      if (!isNativeId(progress?.id) || progress.agent !== "task") continue;
+      if (!isNativeId(progress?.id)) continue;
       const found = pendingTaskCalls.get(progress.id) ?? [];
       if (typeof message.toolCallId === "string") found.push(message.toolCallId);
       pendingTaskCalls.set(progress.id, found);
     }
   }
+  const deliveryCandidates: Array<{ jobId: string; agentUrlId: string; deliveryId: string }> = [];
   for (const raw of branch.slice(lastAssistantIndex + 1)) {
     const message = raw.message && typeof raw.message === "object" ? raw.message : raw;
-    const details = message.details;
+    const details = message.details ?? raw.details;
+    const isWaitResult = message.role === "toolResult" && (details?.op === "wait" || details?.op === "cancel");
+    const isAsyncResult = (message.role === "custom" && message.customType === "async-result") ||
+      (raw.type === "custom_message" && raw.customType === "async-result");
+    if (!isWaitResult && !isAsyncResult) continue;
     for (const job of Array.isArray(details?.jobs) ? details.jobs : []) {
-      if (message.role === "toolResult" && job?.type === "task" && job.status === "completed" && isNativeId(job.id)) completedJobs.add(job.id);
+      if (job?.type !== "task" || job.status !== "completed") continue;
+      // Native automatic deliveries lose their job identity during conversion.
+      if (isAsyncResult) return null;
+      if (isWaitResult && !Object.hasOwn(job, "resultText") && !Object.hasOwn(job, "structured")) continue;
+      const jobId = job.id;
+      const agentUrlId = job.agentUrlId;
+      if (!isNativeId(jobId) || !isNativeId(agentUrlId)) return null;
+      const deliveryId = raw.id;
+      if (!isNativeId(deliveryId)) return null;
+      const effectiveMatches = effectiveMessages.filter((candidateMessage) =>
+        candidateMessage.role === "toolResult" && candidateMessage.toolCallId === message.toolCallId,
+      );
+      if (effectiveMatches.length !== 1) return null;
+      const candidateDetails = effectiveMatches[0].details;
+      if (!candidateDetails || candidateDetails.op !== "wait" && candidateDetails.op !== "cancel" || !Array.isArray(candidateDetails.jobs)) return null;
+      if (!candidateDetails.jobs.some((candidateJob: any) =>
+        candidateJob?.id === jobId && candidateJob?.agentUrlId === agentUrlId && candidateJob?.type === "task" && candidateJob?.status === "completed" &&
+        (Object.hasOwn(candidateJob, "resultText") || Object.hasOwn(candidateJob, "structured")),
+      )) return null;
+      deliveryCandidates.push({ jobId, agentUrlId, deliveryId });
     }
   }
-  if (completedJobs.size === 0) return { dependencies: [], runIds: [] };
+  if (deliveryCandidates.length === 0) return { dependencies: [], references: [] };
   if (!parentSessionFile || readNativeSessionHeader(parentSessionFile)?.id !== parentSessionId) return null;
+  const consumed = readOmpConsumedTaskResultReferences(branch, parentSessionId);
+  if (!consumed) return null;
+  const uniqueCandidates = new Map<string, { jobId: string; agentUrlId: string; deliveryId: string }>();
+  for (const candidate of deliveryCandidates) {
+    const key = JSON.stringify([candidate.deliveryId, candidate.jobId]);
+    if (uniqueCandidates.has(key)) continue;
+    if (consumed.deliveryIds.has(candidate.deliveryId)) continue;
+    if ([...uniqueCandidates.values()].some((previous) => previous.agentUrlId === candidate.agentUrlId)) return null;
+    uniqueCandidates.set(key, candidate);
+  }
+  if (uniqueCandidates.size === 0) return { dependencies: [], references: [] };
   const dependencies: NonNullable<AgentMetadata["depends_on"]> = [];
-  const runIds: string[] = [];
-  for (const jobId of completedJobs) {
-    const runId = `omp:task:${jobId}`;
-    if (alreadyConsumed.has(runId)) continue;
-    const taskCalls = [...new Set(pendingTaskCalls.get(jobId) ?? [])];
+  const references: OmpTaskResultReference[] = [];
+  const usedReferences = new Set<string>();
+  for (const { jobId, agentUrlId, deliveryId } of uniqueCandidates.values()) {
+    const runId = `omp:task:${agentUrlId}`;
+    const taskCalls = [...new Set(pendingTaskCalls.get(agentUrlId) ?? [])];
     if (taskCalls.length !== 1 || calls.filter((id) => id === taskCalls[0]).length !== 1) return null;
-    const childFile = join(dirname(parentSessionFile), basename(parentSessionFile, ".jsonl"), `${jobId}.jsonl`);
-    const completion = readOmpRunCompletion(childFile, parentSessionId, `omp:task:${jobId}`);
-    if (!completion) return null;
+    const childFile = join(dirname(parentSessionFile), basename(parentSessionFile, ".jsonl"), `${agentUrlId}.jsonl`);
+    const completions = readOmpRunCompletions(childFile, parentSessionId, runId);
+    if (!completions) return null;
+    const available = completions.filter((completion) => !consumed.references.has(taskResultReferenceKey(completion)));
+    if (available.length !== 1) return null;
+    const completion = { ...available[0], deliveryId, jobId };
+    const completionKey = taskResultReferenceKey(completion);
+    if (usedReferences.has(completionKey)) return null;
+    usedReferences.add(completionKey);
     dependencies.push({ session_id: `omp:session:${completion.sessionId}`, response_id: completion.responseId, run_id: completion.runId });
-    runIds.push(completion.runId);
+    references.push(completion);
   }
   if (dependencies.length > 8) return null;
-  return { dependencies, runIds };
+  return { dependencies, references };
 }
 
 export function pendingOmpCompactionDependencies(
@@ -306,6 +513,29 @@ export function pendingOmpCompactionDependencies(
   return summaryWasConsumed ? [] : dependencies;
 }
 
+/** A recent IRC arrival has no response-specific peer source in the public extension API. */
+export function hasUnresolvedOmpPeerWake(branch: Array<Record<string, any>>): boolean {
+  let latestConsumerIndex = -1;
+  for (let index = 0; index < branch.length; index += 1) {
+    const entry = branch[index];
+    const message = entry.message && typeof entry.message === "object" ? entry.message : entry;
+    // A compaction entry may be a model-free transformation, so it does not
+    // establish that an inference consumed the incoming peer message.
+    if (message.role === "assistant" && isNativeId(message.responseId)) latestConsumerIndex = index;
+  }
+  return branch.slice(latestConsumerIndex + 1).some((entry) => {
+    const message = entry.message && typeof entry.message === "object" ? entry.message : entry;
+    return message.customType === "irc:incoming" || entry.customType === "irc:incoming";
+  });
+}
+
+export function resolveOmpPeerWakeDependencies(
+  branch: Array<Record<string, any>>,
+  dependencies: AgentMetadata["depends_on"],
+): AgentMetadata["depends_on"] {
+  return hasUnresolvedOmpPeerWake(branch) ? null : dependencies;
+}
+
 export function readOmpForkBoundaryIndex(branch: Array<Record<string, any>>, sessionId: string): number | null {
   const index = branch.findIndex((raw) => {
     const data = raw.data && typeof raw.data === "object" ? raw.data as Record<string, unknown> : null;
@@ -314,29 +544,40 @@ export function readOmpForkBoundaryIndex(branch: Array<Record<string, any>>, ses
   return index < 0 ? null : index;
 }
 
-function readOmpRunCompletion(
+function readOmpRunCompletions(
   childSessionFile: string,
   parentSessionId: string,
   runId: string,
-): { sessionId: string; responseId: string; runId: string } | null {
+): OmpTaskResultCompletion[] | null {
   const header = readNativeSessionHeader(childSessionFile);
   if (!header?.parentSession || readNativeSessionHeader(header.parentSession)?.id !== parentSessionId) return null;
   let fd: number | undefined;
   try {
     fd = openSync(childSessionFile, "r");
     const stat = fstatSync(fd);
-    const length = Math.min(stat.size, 4 * 1024 * 1024);
+    const maxBytes = 4 * 1024 * 1024;
+    if (stat.size > maxBytes) return null;
+    const length = stat.size;
     const buffer = Buffer.alloc(length);
     readSync(fd, buffer, 0, length, stat.size - length);
-    for (const line of buffer.toString("utf8").split("\n").reverse()) {
+    if (length > 0 && buffer[length - 1] !== 0x0a) return null;
+    const completions: OmpTaskResultCompletion[] = [];
+    const seen = new Set<string>();
+    for (const line of buffer.toString("utf8").split("\n")) {
       if (!line) continue;
-      const entry = JSON.parse(line) as { customType?: string; data?: Record<string, unknown> };
+      let entry: { customType?: string; data?: Record<string, unknown> };
+      try { entry = JSON.parse(line) as typeof entry; } catch { return null; }
       if (entry.customType !== OMP_RUN_COMPLETION_ENTRY) continue;
       const data = entry.data;
-      if ((data?.runId === undefined || data.runId === runId) && data?.parentSessionId === parentSessionId && data.sessionId === header.id && typeof data.responseId === "string") {
-        return { sessionId: header.id, responseId: data.responseId, runId };
-      }
+      if (!data || data.version !== 1 || !isNativeId(data.runId) || !isNativeId(data.parentSessionId) ||
+        !isNativeId(data.sessionId) || !isNativeId(data.responseId)) return null;
+      if (data.runId !== runId || data.parentSessionId !== parentSessionId || data.sessionId !== header.id) continue;
+      const completion = { sessionId: header.id, responseId: data.responseId, runId };
+      const key = taskResultReferenceKey(completion);
+      if (!seen.has(key)) completions.push(completion);
+      seen.add(key);
     }
+    return completions;
   } catch {
     return null;
   } finally {
