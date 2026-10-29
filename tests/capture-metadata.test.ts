@@ -159,6 +159,68 @@ describe("shared agent metadata", () => {
     expect(parseAgentMetadata(encoded)?.session.id).toBe(`pi:session:${ids.root}`);
   });
 
+  test("preserves valid identity when dependencies exceed the header budget", () => {
+    const dependencies = Array.from({ length: 8 }, (_, index) => ({
+      session_id: `session-${String(index).padStart(248, "x")}`,
+      response_id: `response-${String(index).padStart(247, "x")}`,
+      stream_id: `stream-${String(index).padStart(249, "x")}`,
+      run_id: `run-${String(index).padStart(252, "x")}`,
+    }));
+    const encoded = encodeAgentMetadata({
+      harness: "pi",
+      harnessVersion: "1.4.0",
+      extensionVersion: "1.1.0-dev",
+      runnerVersion: "0.83.0",
+      sessionId: ids.child,
+      rootSessionId: ids.root,
+      parentSessionId: ids.root,
+      previousResponseId: ids.previous,
+      hasPriorHistory: true,
+      delegation: { runId: "delegated-run", toolCallId: "tool-call" },
+      dependsOn: dependencies,
+    }, ids.stream);
+
+    expect(encoded).not.toBeNull();
+    expect(Buffer.byteLength(encoded!, "ascii")).toBeLessThanOrEqual(AGENT_HEADER_BUDGET);
+    expect(encoded).toMatch(/^[\x20-\x7e]+$/);
+    expect(JSON.parse(encoded!)).toEqual({
+      version: 1,
+      source: {
+        harness: "pi",
+        harness_version: "1.4.0",
+        extension_version: "1.1.0-dev",
+        adapter_version: 1,
+        runner_version: "0.83.0",
+      },
+      session: {
+        id: `pi:session:${ids.child}`,
+        root_id: `pi:session:${ids.root}`,
+        parent_id: `pi:session:${ids.root}`,
+      },
+      stream_id: ids.stream,
+      sequence: { status: "linked", previous_response_id: ids.previous },
+      delegation: { run_id: "delegated-run", tool_call_id: "tool-call" },
+      depends_on: null,
+    } satisfies AgentMetadata);
+    expect(parseAgentMetadata(encoded)?.depends_on).toBeNull();
+
+    const withinBudget = encodeAgentMetadata({
+      harness: "pi",
+      harnessVersion: "1.4.0",
+      extensionVersion: "1.1.0-dev",
+      sessionId: ids.child,
+      rootSessionId: ids.root,
+      parentSessionId: ids.root,
+      previousResponseId: ids.previous,
+      hasPriorHistory: true,
+      delegation: { runId: "delegated-run", toolCallId: "tool-call" },
+      dependsOn: [{ session_id: `pi:session:${ids.root}`, stream_id: ids.stream }],
+    }, ids.stream);
+    expect(parseAgentMetadata(withinBudget)?.depends_on).toEqual([
+      { session_id: `pi:session:${ids.root}`, stream_id: ids.stream },
+    ]);
+  });
+
   test("does not replace a missing predecessor with a later visible assistant", () => {
     const encoded = encodeAgentMetadata({
       harness: "pi",

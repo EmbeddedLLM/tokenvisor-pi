@@ -118,7 +118,11 @@ function cleanIdentity(identity: MetadataIdentity, streamId?: string): AgentMeta
 export function encodeAgentMetadata(identity: MetadataIdentity, streamId?: string): string | null {
   const metadata = cleanIdentity(identity, streamId);
   if (!metadata) return null;
-  const encoded = JSON.stringify(metadata);
+  let encoded = JSON.stringify(metadata);
+  if (Buffer.byteLength(encoded, "ascii") > AGENT_HEADER_BUDGET && metadata.depends_on !== null) {
+    metadata.depends_on = null;
+    encoded = JSON.stringify(metadata);
+  }
   if (!/^[\x20-\x7e]+$/.test(encoded) || Buffer.byteLength(encoded, "ascii") > AGENT_HEADER_BUDGET) return null;
   return encoded;
 }
