@@ -511,10 +511,6 @@ function sameNativeSessionPath(left: string, right: string): boolean {
   try { return realpathSync(left) === realpathSync(right); } catch { return left === right; }
 }
 
-export function createPiEnvelope(ctx: ExtensionContext, input: { forkedRoot?: boolean } = {}): string | null {
-  return encodeAgentMetadata(derivePiIdentity(ctx, input));
-}
-
 export function createPiEnvelopeForStream(
   ctx: ExtensionContext,
   streamId: string,

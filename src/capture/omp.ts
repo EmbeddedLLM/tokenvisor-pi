@@ -423,15 +423,6 @@ function sameNativePath(left: string, right: string): boolean {
   try { return realpathSync(left) === realpathSync(right); } catch { return left === right; }
 }
 
-interface OmpSessionContext {
-  sessionManager: {
-    getSessionId: () => string;
-    getSessionFile?: () => string | undefined;
-    getBranch: () => Array<{ type?: string; message?: MessageLike }>;
-    getHeader?: () => { parentSession?: string };
-  };
-}
-
 export function deriveOmpIdentity(
   options: OmpCaptureContext,
   streamId?: string,
@@ -480,25 +471,4 @@ export function createOmpEnvelope(
   const identity = deriveOmpIdentity(options, streamId, dependencies);
   if (!identity) return null;
   return encodeAgentMetadata(identity, streamId);
-}
-
-export function createOmpEnvelopeFromContext(
-  ctx: OmpSessionContext,
-  streamId: string,
-  dependencies: AgentMetadata["depends_on"] = [],
-  forkedRoot = false,
-): string | null {
-  const messages = ctx.sessionManager.getBranch()
-    .filter((entry) => entry.type === "message")
-    .map((entry) => entry.message ?? {});
-  const sessionId = ctx.sessionManager.getSessionId();
-  const nativeParentSessionFile = ctx.sessionManager.getHeader?.()?.parentSession;
-  const lineage = deriveOmpSessionLineage(sessionId, nativeParentSessionFile, forkedRoot, ctx.sessionManager.getSessionFile?.());
-  return createOmpEnvelope({
-    sessionId,
-    nativeParentSessionId: lineage.parentSessionId,
-    nativeRootSessionId: lineage.rootSessionId,
-    isKnownRoot: lineage.rootSessionId === sessionId,
-    messages,
-  }, streamId, dependencies);
 }
