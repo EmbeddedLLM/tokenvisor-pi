@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devstudio.tokenvisor.ai/schemas/agent-metadata-v1.schema.json",
+  "title": "TokenVisor Agent Metadata v1",
+  "description": "Normalized producer envelope for Pi and OMP inference lineage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "source", "session", "stream_id", "sequence", "delegation", "depends_on"],
+  "properties": {
+    "version": { "const": 1 },
+    "source": { "$ref": "#/$defs/source" },
+    "session": { "$ref": "#/$defs/session" },
+    "stream_id": { "$ref": "#/$defs/nativeId" },
+    "sequence": { "$ref": "#/$defs/sequence" },
+    "delegation": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run_id", "tool_call_id"],
+          "properties": {
+            "run_id": { "$ref": "#/$defs/nativeId" },
+            "tool_call_id": { "$ref": "#/$defs/nativeId" }
+          }
+        }
+      ]
+    },
+    "depends_on": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/dependency" }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "nativeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harness", "harness_version", "extension_version", "adapter_version"],
+      "properties": {
+        "harness": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[ -~]+$" },
+        "harness_version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[ -~]+$" },
+        "extension_version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[ -~]+$" },
+        "adapter_version": { "const": 1 },
+        "runner_version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[ -~]+$" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "root_id", "parent_id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nativeId" },
+        "root_id": { "oneOf": [{ "$ref": "#/$defs/nativeId" }, { "type": "null" }] },
+        "parent_id": { "oneOf": [{ "$ref": "#/$defs/nativeId" }, { "type": "null" }] }
+      }
+    },
+    "sequence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "previous_response_id"],
+      "properties": {
+        "status": { "enum": ["start", "linked", "unavailable"] },
+        "previous_response_id": { "oneOf": [{ "$ref": "#/$defs/nativeId" }, { "type": "null" }] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": { "const": "start" },
+            "previous_response_id": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "status": { "const": "linked" },
+            "previous_response_id": { "$ref": "#/$defs/nativeId" }
+          }
+        },
+        {
+          "properties": {
+            "status": { "const": "unavailable" },
+            "previous_response_id": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id"],
+      "properties": {
+        "session_id": { "$ref": "#/$defs/nativeId" },
+        "response_id": { "$ref": "#/$defs/nativeId" },
+        "stream_id": { "$ref": "#/$defs/nativeId" },
+        "run_id": { "$ref": "#/$defs/nativeId" }
+      },
+      "oneOf": [
+        {
+          "anyOf": [{ "required": ["stream_id"] }, { "required": ["response_id"] }]
+        }
+      ]
+    }
+  }
+}

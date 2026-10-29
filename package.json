@@ -1,10 +1,24 @@
 {
   "name": "tokenvisor-pi",
-  "version": "1.0.0",
+  "version": "1.1.0-dev",
   "description": "TokenVisor custom provider for pi — dynamic model discovery from devstudio.tokenvisor.ai",
-  "keywords": ["pi-package", "pi-extension", "provider", "tokenvisor"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "provider",
+    "tokenvisor"
+  ],
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
 }
