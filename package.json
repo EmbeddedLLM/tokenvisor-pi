@@ -19,6 +19,7 @@
     "typescript": "5.9.3"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check:backend-conformance": "bun scripts/check-conformance-parity.mjs"
   }
 }

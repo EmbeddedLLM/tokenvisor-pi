@@ -1,0 +1,1739 @@
+{
+  "schema": "tokenvisor.tests.pi-native-workflow-prefix-v1",
+  "provenance": {
+    "pi_coding_agent": "1.4.0",
+    "pi_subagents": "0.83.0",
+    "native_session_sha256": "bd75c4403d7b0dd8fe63aca7a6dc9c29d0397c12c07bb66789d3615ed39b385e",
+    "trace_sha256": "e93fa90f982e7fd4d836a4c5d4d51179600451416f297ef8488f10b1b3fe0797",
+    "source_anchors": [
+      "pi-subagents 0.83.0 src/runs/background/notify.js aggregate notification details.runs[].childRuns/childOutputs and keyed Preview blocks",
+      "pi-subagents 0.83.0 src/runs/background/notify.js incremental child status-only notification",
+      "pi-subagents 0.83.0 src/runs/shared/acceptance.js stripAcceptanceReport and src/runs/background/subagent-runner.js output normalization",
+      "pi-subagents 0.83.0 src/runs/background/notify.js childInlinePreview preserves leading newlines while formatSingleCompletion trims direct summaries",
+      "Pi 1.4.0 ExtensionRunner before_provider_headers hook"
+    ],
+    "privacy": "All prompts, assistant reasoning, tool arguments beyond workflow mode, output previews, and filesystem paths are redacted. Native IDs, parentId topology, exact native run markers, statuses, and keyed labels are retained."
+  },
+  "root_session": {
+    "header": {
+      "type": "session",
+      "version": 3,
+      "id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7",
+      "cwd": "/fixture"
+    },
+    "entries": [
+      {
+        "type": "session_info",
+        "id": "0a90d434",
+        "parentId": null
+      },
+      {
+        "type": "model_change",
+        "id": "0961c415",
+        "parentId": "0a90d434"
+      },
+      {
+        "type": "thinking_level_change",
+        "id": "85fc16eb",
+        "parentId": "0961c415"
+      },
+      {
+        "type": "message",
+        "id": "f39d411a",
+        "parentId": "85fc16eb",
+        "message": {
+          "role": "system"
+        }
+      },
+      {
+        "type": "message",
+        "id": "aca1fad0",
+        "parentId": "f39d411a",
+        "message": {
+          "role": "user"
+        }
+      },
+      {
+        "type": "message",
+        "id": "10e8ce31",
+        "parentId": "aca1fad0",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-babae9a5664332e3",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-bb91d8e4f2e8d9e0"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "id": "7f4da270",
+        "parentId": "10e8ce31",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-bb91d8e4f2e8d9e0"
+        }
+      },
+      {
+        "type": "message",
+        "id": "7eef596f",
+        "parentId": "7f4da270",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-a0dcb9ad191d2b65",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-a953e2d05b3ae38c"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "id": "05d08b0a",
+        "parentId": "7eef596f",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-a953e2d05b3ae38c"
+        }
+      },
+      {
+        "type": "message",
+        "id": "2f67bdc5",
+        "parentId": "05d08b0a",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-995bcd1285fc3114",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-afa1c9110f6790b5"
+            },
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-af13ea45ed0daf4b"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "id": "a30ff62d",
+        "parentId": "2f67bdc5",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-afa1c9110f6790b5"
+        }
+      },
+      {
+        "type": "message",
+        "id": "663b5360",
+        "parentId": "a30ff62d",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-af13ea45ed0daf4b"
+        }
+      },
+      {
+        "type": "message",
+        "id": "ad2f9e2b",
+        "parentId": "663b5360",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-91cd007fbd82020d",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-8259246a76ea0d2b"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "id": "7b631523",
+        "parentId": "ad2f9e2b",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-8259246a76ea0d2b"
+        }
+      },
+      {
+        "type": "message",
+        "id": "f8bb4f5e",
+        "parentId": "7b631523",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-8628ec46cff3d36e",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-9bdcd15fde937f90",
+              "arguments": {
+                "workflow": "parallel"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "id": "5dfca1c6",
+        "parentId": "f8bb4f5e",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-9bdcd15fde937f90",
+          "details": {
+            "mode": "workflow",
+            "runId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+            "workflowChildren": {
+              "version": 1,
+              "parentToolCallId": "chatcmpl-tool-9bdcd15fde937f90",
+              "workflowRunId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+              "inventoryComplete": false,
+              "workflowState": "running",
+              "children": []
+            }
+          }
+        }
+      },
+      {
+        "type": "message",
+        "id": "b4f2820a",
+        "parentId": "5dfca1c6",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-a592fa116fb87be7"
+        }
+      },
+      {
+        "type": "custom_message",
+        "id": "4db31bde",
+        "parentId": "b4f2820a",
+        "customType": "subagent-incremental-child-notify",
+        "details": {
+          "childKey": "task-2",
+          "outcome": "completed"
+        },
+        "content": "Workflow child completed: **task-2**\nWorkflow run: 136bf81d-89ce-4867-9531-ddf4d9ab5ee5\nChild run: 2cab92e5-537d-40b0-9431-324b66961ccb\nOutput: fixture://redacted\nStatus: workflow still running"
+      },
+      {
+        "type": "custom_message",
+        "id": "b688b5c5",
+        "parentId": "4db31bde",
+        "customType": "subagent-incremental-child-notify",
+        "details": {
+          "childKey": "task-1",
+          "outcome": "completed"
+        },
+        "content": "Workflow child completed: **task-1**\nWorkflow run: 136bf81d-89ce-4867-9531-ddf4d9ab5ee5\nChild run: 8ccc4dab-4c91-43b5-bfb6-5d0c24519c88\nOutput: fixture://redacted\nStatus: workflow still running"
+      },
+      {
+        "type": "custom_message",
+        "id": "c98197b5",
+        "parentId": "b688b5c5",
+        "customType": "subagent-incremental-child-notify",
+        "details": {
+          "childKey": "task-3",
+          "outcome": "completed"
+        },
+        "content": "Workflow child completed: **task-3**\nWorkflow run: 136bf81d-89ce-4867-9531-ddf4d9ab5ee5\nChild run: 65d8fd74-26be-4327-8127-3e17e78ffecc\nOutput: fixture://redacted\nStatus: workflow still running"
+      },
+      {
+        "type": "custom_message",
+        "id": "48099efd",
+        "parentId": "c98197b5",
+        "customType": "subagent-notify",
+        "details": {
+          "runs": [
+            {
+              "runId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+              "workflowRunId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+              "status": "completed",
+              "childRuns": [
+                {
+                  "workflowKey": "task-1",
+                  "runId": "8ccc4dab-4c91-43b5-bfb6-5d0c24519c88",
+                  "status": "completed"
+                },
+                {
+                  "workflowKey": "task-2",
+                  "runId": "2cab92e5-537d-40b0-9431-324b66961ccb",
+                  "status": "completed"
+                },
+                {
+                  "workflowKey": "task-3",
+                  "runId": "65d8fd74-26be-4327-8127-3e17e78ffecc",
+                  "status": "completed"
+                }
+              ],
+              "childOutputs": [
+                {
+                  "workflowKey": "task-1",
+                  "runId": "8ccc4dab-4c91-43b5-bfb6-5d0c24519c88",
+                  "status": "completed",
+                  "outputArtifactPath": "fixture://8ccc4dab-4c91-43b5-bfb6-5d0c24519c88"
+                },
+                {
+                  "workflowKey": "task-2",
+                  "runId": "2cab92e5-537d-40b0-9431-324b66961ccb",
+                  "status": "completed",
+                  "outputArtifactPath": "fixture://2cab92e5-537d-40b0-9431-324b66961ccb"
+                },
+                {
+                  "workflowKey": "task-3",
+                  "runId": "65d8fd74-26be-4327-8127-3e17e78ffecc",
+                  "status": "completed",
+                  "outputArtifactPath": "fixture://65d8fd74-26be-4327-8127-3e17e78ffecc"
+                }
+              ]
+            }
+          ]
+        },
+        "content": "Background task completed: **workflow**\nWorkflow run: 136bf81d-89ce-4867-9531-ddf4d9ab5ee5\nChild runs: task-1=8ccc4dab-4c91-43b5-bfb6-5d0c24519c88 (completed), task-2=2cab92e5-537d-40b0-9431-324b66961ccb (completed), task-3=65d8fd74-26be-4327-8127-3e17e78ffecc (completed)\n\nChild outputs:\n- key=task-1 run=8ccc4dab-4c91-43b5-bfb6-5d0c24519c88 status=completed\n  Saved output: unavailable\n  Output artifact (retention-managed): fixture://8ccc4dab-4c91-43b5-bfb6-5d0c24519c88\n  Preview:\n    | [redacted child output]\n- key=task-2 run=2cab92e5-537d-40b0-9431-324b66961ccb status=completed\n  Saved output: unavailable\n  Output artifact (retention-managed): fixture://2cab92e5-537d-40b0-9431-324b66961ccb\n  Preview:\n    | [redacted child output]\n- key=task-3 run=65d8fd74-26be-4327-8127-3e17e78ffecc status=completed\n  Saved output: unavailable\n  Output artifact (retention-managed): fixture://65d8fd74-26be-4327-8127-3e17e78ffecc\n  Preview:\n    | [redacted child output]"
+      },
+      {
+        "type": "message",
+        "id": "79b703d1",
+        "parentId": "48099efd",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-91eb2fb6b898f146"
+        }
+      },
+      {
+        "type": "message",
+        "id": "eaaf8dfb",
+        "parentId": "79b703d1",
+        "message": {
+          "role": "user"
+        }
+      },
+      {
+        "type": "message",
+        "id": "6eed19a2",
+        "parentId": "eaaf8dfb",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-bda0079258a12dac",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-9c37988507d23d77",
+              "arguments": {
+                "workflow": "parallel"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "id": "22df5666",
+        "parentId": "6eed19a2",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-9c37988507d23d77",
+          "details": {
+            "mode": "workflow",
+            "runId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+            "workflowChildren": {
+              "version": 1,
+              "parentToolCallId": "chatcmpl-tool-9c37988507d23d77",
+              "workflowRunId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+              "inventoryComplete": false,
+              "workflowState": "running",
+              "children": []
+            }
+          }
+        }
+      },
+      {
+        "type": "message",
+        "id": "034898f9",
+        "parentId": "22df5666",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-b95a7631e4f71886"
+        }
+      },
+      {
+        "type": "custom_message",
+        "id": "13346892",
+        "parentId": "034898f9",
+        "customType": "subagent-incremental-child-notify",
+        "details": {
+          "childKey": "task-1",
+          "outcome": "completed"
+        },
+        "content": "Workflow child completed: **task-1**\nWorkflow run: 1739386e-9e9c-4220-b93d-6e01f50bf374\nChild run: f3e53b45-7035-4ee7-816e-23e417e8658f\nOutput: fixture://redacted\nStatus: workflow still running"
+      },
+      {
+        "type": "custom_message",
+        "id": "caaf4fdf",
+        "parentId": "13346892",
+        "customType": "subagent-incremental-child-notify",
+        "details": {
+          "childKey": "task-3",
+          "outcome": "completed"
+        },
+        "content": "Workflow child completed: **task-3**\nWorkflow run: 1739386e-9e9c-4220-b93d-6e01f50bf374\nChild run: f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb\nOutput: fixture://redacted\nStatus: workflow still running"
+      },
+      {
+        "type": "custom_message",
+        "id": "f438662f",
+        "parentId": "caaf4fdf",
+        "customType": "subagent-incremental-child-notify",
+        "details": {
+          "childKey": "task-2",
+          "outcome": "completed"
+        },
+        "content": "Workflow child completed: **task-2**\nWorkflow run: 1739386e-9e9c-4220-b93d-6e01f50bf374\nChild run: fd44a4de-45fb-457a-8a35-32329b9f7c8c\nOutput: fixture://redacted\nStatus: workflow still running"
+      },
+      {
+        "type": "custom_message",
+        "id": "16fea3ed",
+        "parentId": "f438662f",
+        "customType": "subagent-notify",
+        "details": {
+          "runs": [
+            {
+              "runId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+              "workflowRunId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+              "status": "completed",
+              "childRuns": [
+                {
+                  "workflowKey": "task-1",
+                  "runId": "f3e53b45-7035-4ee7-816e-23e417e8658f",
+                  "status": "completed"
+                },
+                {
+                  "workflowKey": "task-2",
+                  "runId": "fd44a4de-45fb-457a-8a35-32329b9f7c8c",
+                  "status": "completed"
+                },
+                {
+                  "workflowKey": "task-3",
+                  "runId": "f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb",
+                  "status": "completed"
+                }
+              ],
+              "childOutputs": [
+                {
+                  "workflowKey": "task-1",
+                  "runId": "f3e53b45-7035-4ee7-816e-23e417e8658f",
+                  "status": "completed",
+                  "outputArtifactPath": "fixture://f3e53b45-7035-4ee7-816e-23e417e8658f"
+                },
+                {
+                  "workflowKey": "task-2",
+                  "runId": "fd44a4de-45fb-457a-8a35-32329b9f7c8c",
+                  "status": "completed",
+                  "outputArtifactPath": "fixture://fd44a4de-45fb-457a-8a35-32329b9f7c8c"
+                },
+                {
+                  "workflowKey": "task-3",
+                  "runId": "f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb",
+                  "status": "completed",
+                  "outputArtifactPath": "fixture://f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb"
+                }
+              ]
+            }
+          ]
+        },
+        "content": "Background task completed: **workflow**\nWorkflow run: 1739386e-9e9c-4220-b93d-6e01f50bf374\nChild runs: task-1=f3e53b45-7035-4ee7-816e-23e417e8658f (completed), task-2=fd44a4de-45fb-457a-8a35-32329b9f7c8c (completed), task-3=f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb (completed)\n\nChild outputs:\n- key=task-1 run=f3e53b45-7035-4ee7-816e-23e417e8658f status=completed\n  Saved output: unavailable\n  Output artifact (retention-managed): fixture://f3e53b45-7035-4ee7-816e-23e417e8658f\n  Preview:\n    | [redacted child output]\n- key=task-2 run=fd44a4de-45fb-457a-8a35-32329b9f7c8c status=completed\n  Saved output: unavailable\n  Output artifact (retention-managed): fixture://fd44a4de-45fb-457a-8a35-32329b9f7c8c\n  Preview:\n    | [redacted child output]\n- key=task-3 run=f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb status=completed\n  Saved output: unavailable\n  Output artifact (retention-managed): fixture://f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb\n  Preview:\n    | [redacted child output]"
+      },
+      {
+        "type": "message",
+        "id": "08805afb",
+        "parentId": "16fea3ed",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-a7a860a5ede4f4e1",
+          "stopReason": "stop"
+        }
+      },
+      {
+        "type": "message",
+        "id": "82811a3f",
+        "parentId": "08805afb",
+        "message": {
+          "role": "user"
+        }
+      },
+      {
+        "type": "message",
+        "id": "f2a926a3",
+        "parentId": "82811a3f",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-a70e99460f7f35c2"
+        }
+      },
+      {
+        "type": "message",
+        "id": "b248f1ac",
+        "parentId": "f2a926a3",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-905061659a31ecd5"
+        }
+      },
+      {
+        "type": "message",
+        "id": "0b6ee858",
+        "parentId": "b248f1ac",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-9b78dcd7e53a6347"
+        }
+      },
+      {
+        "type": "message",
+        "id": "ecc03603",
+        "parentId": "0b6ee858",
+        "message": {
+          "role": "user"
+        }
+      },
+      {
+        "type": "message",
+        "id": "d78be508",
+        "parentId": "ecc03603",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-9e74070f70af12b9",
+          "content": [
+            {
+              "type": "toolCall",
+              "name": "subagent",
+              "id": "chatcmpl-tool-8f4fd2609fe69a8e"
+            }
+          ]
+        }
+      },
+      {
+        "type": "message",
+        "id": "a61580ee",
+        "parentId": "d78be508",
+        "message": {
+          "role": "toolResult",
+          "toolCallId": "chatcmpl-tool-8f4fd2609fe69a8e"
+        }
+      },
+      {
+        "type": "message",
+        "id": "07c5530e",
+        "parentId": "a61580ee",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-980d58fd37953bc1"
+        }
+      },
+      {
+        "type": "custom_message",
+        "id": "a4b96843",
+        "parentId": "07c5530e",
+        "customType": "subagent-notify",
+        "details": {
+          "runs": [
+            {
+              "runId": "2d3c33b1-713f-497a-8015-28156e330eea",
+              "status": "completed"
+            }
+          ]
+        },
+        "content": "Background task completed: **workflow**\nWorkflow run: 2d3c33b1-713f-497a-8015-28156e330eea\nChild runs: \n\nChild outputs:"
+      },
+      {
+        "type": "message",
+        "id": "c1f28987",
+        "parentId": "a4b96843",
+        "message": {
+          "role": "assistant",
+          "responseId": "chatcmpl-acec830f37ab994a",
+          "stopReason": "stop"
+        }
+      }
+    ]
+  },
+  "child_sessions": {
+    "01a18cfc-5ea6-76af-baf2-1ea26555b7fa": {
+      "header": {
+        "type": "session",
+        "version": 3,
+        "id": "01a18cfc-5ea6-76af-baf2-1ea26555b7fa",
+        "cwd": "/fixture",
+        "parentSession": "@root"
+      },
+      "entries": [
+        {
+          "type": "model_change",
+          "id": "c698079c",
+          "parentId": null
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "fda58a57",
+          "parentId": "c698079c"
+        },
+        {
+          "type": "session_info",
+          "id": "79f2b044",
+          "parentId": "fda58a57"
+        },
+        {
+          "type": "message",
+          "id": "7ba5f701",
+          "parentId": "79f2b044",
+          "message": {
+            "role": "system"
+          }
+        },
+        {
+          "type": "message",
+          "id": "abe8b36a",
+          "parentId": "7ba5f701",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "message",
+          "id": "750c1ea5",
+          "parentId": "abe8b36a",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-95934c13e0e4b9cc"
+          }
+        },
+        {
+          "type": "message",
+          "id": "71a1e0d2",
+          "parentId": "750c1ea5",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-a122b3d72c522101"
+          }
+        },
+        {
+          "type": "message",
+          "id": "896b7c5f",
+          "parentId": "71a1e0d2",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-921f93fe64a4119e"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "390731b0",
+          "parentId": "896b7c5f",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "65d8fd74-26be-4327-8127-3e17e78ffecc",
+            "sessionId": "01a18cfc-5ea6-76af-baf2-1ea26555b7fa",
+            "responseId": "chatcmpl-921f93fe64a4119e"
+          }
+        }
+      ]
+    },
+    "01a18cfc-5f07-71ab-b3cb-19737629abd2": {
+      "header": {
+        "type": "session",
+        "version": 3,
+        "id": "01a18cfc-5f07-71ab-b3cb-19737629abd2",
+        "cwd": "/fixture",
+        "parentSession": "@root"
+      },
+      "entries": [
+        {
+          "type": "model_change",
+          "id": "066d40f7",
+          "parentId": null
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "dacfcaa0",
+          "parentId": "066d40f7"
+        },
+        {
+          "type": "session_info",
+          "id": "40bed3f7",
+          "parentId": "dacfcaa0"
+        },
+        {
+          "type": "message",
+          "id": "715083c9",
+          "parentId": "40bed3f7",
+          "message": {
+            "role": "system"
+          }
+        },
+        {
+          "type": "message",
+          "id": "a368d851",
+          "parentId": "715083c9",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "message",
+          "id": "a772707e",
+          "parentId": "a368d851",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-a1ee2e821d31b9bd"
+          }
+        },
+        {
+          "type": "message",
+          "id": "8353fd8f",
+          "parentId": "a772707e",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-8ac2d4822fb99286"
+          }
+        },
+        {
+          "type": "message",
+          "id": "52e38101",
+          "parentId": "8353fd8f",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-846a52c9ade42387"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "a53c7e7d",
+          "parentId": "52e38101",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "8ccc4dab-4c91-43b5-bfb6-5d0c24519c88",
+            "sessionId": "01a18cfc-5f07-71ab-b3cb-19737629abd2",
+            "responseId": "chatcmpl-846a52c9ade42387"
+          }
+        }
+      ]
+    },
+    "01a18f45-bf4b-71aa-b8bf-5a746a23ad61": {
+      "header": {
+        "type": "session",
+        "version": 3,
+        "id": "01a18f45-bf4b-71aa-b8bf-5a746a23ad61",
+        "cwd": "/fixture",
+        "parentSession": "@root"
+      },
+      "entries": [
+        {
+          "type": "model_change",
+          "id": "20c949b5",
+          "parentId": null
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "30616092",
+          "parentId": "20c949b5"
+        },
+        {
+          "type": "session_info",
+          "id": "cf15218d",
+          "parentId": "30616092"
+        },
+        {
+          "type": "message",
+          "id": "e52a05d7",
+          "parentId": "cf15218d",
+          "message": {
+            "role": "system"
+          }
+        },
+        {
+          "type": "message",
+          "id": "700ede55",
+          "parentId": "e52a05d7",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "message",
+          "id": "7e50da1e",
+          "parentId": "700ede55",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-ab529da7019cddfd"
+          }
+        },
+        {
+          "type": "message",
+          "id": "0313c0a7",
+          "parentId": "7e50da1e",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-a93abdf63b894183"
+          }
+        },
+        {
+          "type": "message",
+          "id": "f657d17d",
+          "parentId": "0313c0a7",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-96270551d08d69de"
+          }
+        },
+        {
+          "type": "message",
+          "id": "11e0ff97",
+          "parentId": "f657d17d",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-aa4bff6001455ea5"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "d192a23e",
+          "parentId": "11e0ff97",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "2d3c33b1-713f-497a-8015-28156e330eea",
+            "sessionId": "01a18f45-bf4b-71aa-b8bf-5a746a23ad61",
+            "responseId": "chatcmpl-aa4bff6001455ea5"
+          }
+        }
+      ]
+    },
+    "01a18d24-51f0-7608-8a8c-a4545bc83312": {
+      "header": {
+        "type": "session",
+        "version": 3,
+        "id": "01a18d24-51f0-7608-8a8c-a4545bc83312",
+        "cwd": "/fixture",
+        "parentSession": "@root"
+      },
+      "entries": [
+        {
+          "type": "model_change",
+          "id": "be2ec183",
+          "parentId": null
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "eeaa96d6",
+          "parentId": "be2ec183"
+        },
+        {
+          "type": "session_info",
+          "id": "380766d2",
+          "parentId": "eeaa96d6"
+        },
+        {
+          "type": "message",
+          "id": "238612c4",
+          "parentId": "380766d2",
+          "message": {
+            "role": "system"
+          }
+        },
+        {
+          "type": "message",
+          "id": "85620c62",
+          "parentId": "238612c4",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "message",
+          "id": "995bbc67",
+          "parentId": "85620c62",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-b6f5dc70b993950c"
+          }
+        },
+        {
+          "type": "message",
+          "id": "ca1181d5",
+          "parentId": "995bbc67",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-8829197b104f5670"
+          }
+        },
+        {
+          "type": "message",
+          "id": "5fca8538",
+          "parentId": "ca1181d5",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-b0581fc36cebd090"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "8e63b37c",
+          "parentId": "5fca8538",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "f3e53b45-7035-4ee7-816e-23e417e8658f",
+            "sessionId": "01a18d24-51f0-7608-8a8c-a4545bc83312",
+            "responseId": "chatcmpl-b0581fc36cebd090"
+          }
+        }
+      ]
+    },
+    "01a18cfc-5e79-726b-af19-61a6d0a084b1": {
+      "header": {
+        "type": "session",
+        "version": 3,
+        "id": "01a18cfc-5e79-726b-af19-61a6d0a084b1",
+        "cwd": "/fixture",
+        "parentSession": "@root"
+      },
+      "entries": [
+        {
+          "type": "model_change",
+          "id": "3d738e36",
+          "parentId": null
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "b0f439e1",
+          "parentId": "3d738e36"
+        },
+        {
+          "type": "session_info",
+          "id": "f0a9d8c4",
+          "parentId": "b0f439e1"
+        },
+        {
+          "type": "message",
+          "id": "4b44abcc",
+          "parentId": "f0a9d8c4",
+          "message": {
+            "role": "system"
+          }
+        },
+        {
+          "type": "message",
+          "id": "c37e523f",
+          "parentId": "4b44abcc",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "message",
+          "id": "ab7a8c8d",
+          "parentId": "c37e523f",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-92863695e9be8be2"
+          }
+        },
+        {
+          "type": "message",
+          "id": "da66fe3c",
+          "parentId": "ab7a8c8d",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-a857f4f99db374ba"
+          }
+        },
+        {
+          "type": "message",
+          "id": "c4593955",
+          "parentId": "da66fe3c",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-85a43c763a82d1b9"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "ff9b27f2",
+          "parentId": "c4593955",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "2cab92e5-537d-40b0-9431-324b66961ccb",
+            "sessionId": "01a18cfc-5e79-726b-af19-61a6d0a084b1",
+            "responseId": "chatcmpl-85a43c763a82d1b9"
+          }
+        }
+      ]
+    },
+    "01a18d24-520c-709e-b871-7234ed00505b": {
+      "header": {
+        "type": "session",
+        "version": 3,
+        "id": "01a18d24-520c-709e-b871-7234ed00505b",
+        "cwd": "/fixture",
+        "parentSession": "@root"
+      },
+      "entries": [
+        {
+          "type": "model_change",
+          "id": "394795f5",
+          "parentId": null
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "d1023ead",
+          "parentId": "394795f5"
+        },
+        {
+          "type": "session_info",
+          "id": "913f2dc0",
+          "parentId": "d1023ead"
+        },
+        {
+          "type": "message",
+          "id": "4f7f4352",
+          "parentId": "913f2dc0",
+          "message": {
+            "role": "system"
+          }
+        },
+        {
+          "type": "message",
+          "id": "1b08d383",
+          "parentId": "4f7f4352",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "message",
+          "id": "76d31778",
+          "parentId": "1b08d383",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-8e7b76f7f51a1260"
+          }
+        },
+        {
+          "type": "message",
+          "id": "f2f91d6f",
+          "parentId": "76d31778",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-b199a8da6585c695"
+          }
+        },
+        {
+          "type": "message",
+          "id": "c461c74b",
+          "parentId": "f2f91d6f",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-8498e1dc36b6bb19"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "900dbe6d",
+          "parentId": "c461c74b",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb",
+            "sessionId": "01a18d24-520c-709e-b871-7234ed00505b",
+            "responseId": "chatcmpl-8498e1dc36b6bb19"
+          }
+        }
+      ]
+    },
+    "01a18d24-5233-739c-ad7a-187049410d07": {
+      "header": {
+        "type": "session",
+        "version": 3,
+        "id": "01a18d24-5233-739c-ad7a-187049410d07",
+        "cwd": "/fixture",
+        "parentSession": "@root"
+      },
+      "entries": [
+        {
+          "type": "model_change",
+          "id": "baee7f15",
+          "parentId": null
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "0b83ec9e",
+          "parentId": "baee7f15"
+        },
+        {
+          "type": "session_info",
+          "id": "6b12ad34",
+          "parentId": "0b83ec9e"
+        },
+        {
+          "type": "message",
+          "id": "7427182b",
+          "parentId": "6b12ad34",
+          "message": {
+            "role": "system"
+          }
+        },
+        {
+          "type": "message",
+          "id": "b5eefe29",
+          "parentId": "7427182b",
+          "message": {
+            "role": "user"
+          }
+        },
+        {
+          "type": "message",
+          "id": "7553b2fa",
+          "parentId": "b5eefe29",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-88dc478052858aac"
+          }
+        },
+        {
+          "type": "message",
+          "id": "77b73e27",
+          "parentId": "7553b2fa",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "chatcmpl-tool-bfff12895ef55b59"
+          }
+        },
+        {
+          "type": "message",
+          "id": "c7b757c7",
+          "parentId": "77b73e27",
+          "message": {
+            "role": "assistant",
+            "responseId": "chatcmpl-968b8fca19bd60ae"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "004e3d9c",
+          "parentId": "c7b757c7",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "fd44a4de-45fb-457a-8a35-32329b9f7c8c",
+            "sessionId": "01a18d24-5233-739c-ad7a-187049410d07",
+            "responseId": "chatcmpl-968b8fca19bd60ae"
+          }
+        }
+      ]
+    }
+  },
+  "statuses": [
+    {
+      "lifecycleArtifactVersion": 3,
+      "runId": "65d8fd74-26be-4327-8127-3e17e78ffecc",
+      "mode": "single",
+      "state": "complete",
+      "pid": 1056734,
+      "parentWorkflowRunId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+      "workflowKey": "task-3",
+      "toolCallId": "2cfc5a17-c62c-4ba2-ae8a-af385df6c069",
+      "sessionId": "@root",
+      "sessionFile": "@child:01a18cfc-5ea6-76af-baf2-1ea26555b7fa",
+      "steps": [
+        {
+          "sessionFile": "@child:01a18cfc-5ea6-76af-baf2-1ea26555b7fa"
+        }
+      ]
+    },
+    {
+      "lifecycleArtifactVersion": 3,
+      "runId": "8ccc4dab-4c91-43b5-bfb6-5d0c24519c88",
+      "mode": "single",
+      "state": "complete",
+      "pid": 1056718,
+      "parentWorkflowRunId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+      "workflowKey": "task-1",
+      "toolCallId": "7ea0ba68-d603-43c5-afad-c2d93401d90d",
+      "sessionId": "@root",
+      "sessionFile": "@child:01a18cfc-5f07-71ab-b3cb-19737629abd2",
+      "steps": [
+        {
+          "sessionFile": "@child:01a18cfc-5f07-71ab-b3cb-19737629abd2"
+        }
+      ]
+    },
+    {
+      "lifecycleArtifactVersion": 3,
+      "runId": "2d3c33b1-713f-497a-8015-28156e330eea",
+      "mode": "single",
+      "state": "complete",
+      "pid": 2187495,
+      "toolCallId": "chatcmpl-tool-8f4fd2609fe69a8e",
+      "sessionId": "@root",
+      "sessionFile": "@child:01a18f45-bf4b-71aa-b8bf-5a746a23ad61",
+      "steps": [
+        {
+          "sessionFile": "@child:01a18f45-bf4b-71aa-b8bf-5a746a23ad61"
+        }
+      ]
+    },
+    {
+      "lifecycleArtifactVersion": 3,
+      "runId": "f3e53b45-7035-4ee7-816e-23e417e8658f",
+      "mode": "single",
+      "state": "complete",
+      "pid": 1134164,
+      "parentWorkflowRunId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+      "workflowKey": "task-1",
+      "toolCallId": "0d93ffab-302c-4480-b600-39925844aaf2",
+      "sessionId": "@root",
+      "sessionFile": "@child:01a18d24-51f0-7608-8a8c-a4545bc83312",
+      "steps": [
+        {
+          "sessionFile": "@child:01a18d24-51f0-7608-8a8c-a4545bc83312"
+        }
+      ]
+    },
+    {
+      "lifecycleArtifactVersion": 3,
+      "runId": "2cab92e5-537d-40b0-9431-324b66961ccb",
+      "mode": "single",
+      "state": "complete",
+      "pid": 1056727,
+      "parentWorkflowRunId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+      "workflowKey": "task-2",
+      "toolCallId": "00677423-6066-4931-896a-640d84261e2e",
+      "sessionId": "@root",
+      "sessionFile": "@child:01a18cfc-5e79-726b-af19-61a6d0a084b1",
+      "steps": [
+        {
+          "sessionFile": "@child:01a18cfc-5e79-726b-af19-61a6d0a084b1"
+        }
+      ]
+    },
+    {
+      "lifecycleArtifactVersion": 3,
+      "runId": "f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb",
+      "mode": "single",
+      "state": "complete",
+      "pid": 1134178,
+      "parentWorkflowRunId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+      "workflowKey": "task-3",
+      "toolCallId": "ba64e9a9-557f-46af-93a9-dec7c0988274",
+      "sessionId": "@root",
+      "sessionFile": "@child:01a18d24-520c-709e-b871-7234ed00505b",
+      "steps": [
+        {
+          "sessionFile": "@child:01a18d24-520c-709e-b871-7234ed00505b"
+        }
+      ]
+    },
+    {
+      "lifecycleArtifactVersion": 3,
+      "runId": "fd44a4de-45fb-457a-8a35-32329b9f7c8c",
+      "mode": "single",
+      "state": "complete",
+      "pid": 1134170,
+      "parentWorkflowRunId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+      "workflowKey": "task-2",
+      "toolCallId": "9d54637d-e680-41ff-b519-b644c323dbe3",
+      "sessionId": "@root",
+      "sessionFile": "@child:01a18d24-5233-739c-ad7a-187049410d07",
+      "steps": [
+        {
+          "sessionFile": "@child:01a18d24-5233-739c-ad7a-187049410d07"
+        }
+      ]
+    },
+    {
+      "runId": "136bf81d-89ce-4867-9531-ddf4d9ab5ee5",
+      "toolCallId": "chatcmpl-tool-9bdcd15fde937f90",
+      "mode": "workflow",
+      "state": "complete",
+      "sessionId": "@root"
+    },
+    {
+      "runId": "1739386e-9e9c-4220-b93d-6e01f50bf374",
+      "toolCallId": "chatcmpl-tool-9c37988507d23d77",
+      "mode": "workflow",
+      "state": "complete",
+      "sessionId": "@root"
+    },
+    {
+      "runId": "ecacf202-7476-43d9-baa6-fbd8c8ce4948",
+      "toolCallId": "chatcmpl-tool-a8924a8ca1784b5a",
+      "mode": "workflow",
+      "state": "complete",
+      "sessionId": "@root"
+    }
+  ],
+  "requests": [
+    {
+      "audit_id": "01a18cfb-be42-7db0-9e3b-9d0b20fc7462",
+      "response_id": "chatcmpl-babae9a5664332e3",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18cfb-d11e-7233-933a-661e3fe334d6",
+      "response_id": "chatcmpl-a0dcb9ad191d2b65",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18cfb-e7ec-7e73-8080-d01aedd641cf",
+      "response_id": "chatcmpl-995bcd1285fc3114",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18cfc-0df4-7c91-99a7-59e150742158",
+      "response_id": "chatcmpl-91cd007fbd82020d",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18cfc-55dd-7aa0-bca4-e7abec478f88",
+      "response_id": "chatcmpl-8628ec46cff3d36e",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18cfc-6dd9-7de0-a694-402074481c03",
+      "response_id": "chatcmpl-a592fa116fb87be7",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18cfc-6f92-7ce2-8047-f1e1312582bb",
+      "response_id": "chatcmpl-92863695e9be8be2",
+      "session_id": "01a18cfc-5e79-726b-af19-61a6d0a084b1"
+    },
+    {
+      "audit_id": "01a18cfc-6c94-7e71-bb2f-0624ea27ead1",
+      "response_id": "chatcmpl-95934c13e0e4b9cc",
+      "session_id": "01a18cfc-5ea6-76af-baf2-1ea26555b7fa"
+    },
+    {
+      "audit_id": "01a18cfc-74d7-7201-83d5-c8c65213d901",
+      "response_id": "chatcmpl-a1ee2e821d31b9bd",
+      "session_id": "01a18cfc-5f07-71ab-b3cb-19737629abd2"
+    },
+    {
+      "audit_id": "01a18cfc-fb5c-7b80-a891-3bdf73d4dd88",
+      "response_id": "chatcmpl-921f93fe64a4119e",
+      "session_id": "01a18cfc-5ea6-76af-baf2-1ea26555b7fa"
+    },
+    {
+      "audit_id": "01a18cfc-7848-7ce0-bd45-756f0de147a3",
+      "response_id": "chatcmpl-85a43c763a82d1b9",
+      "session_id": "01a18cfc-5e79-726b-af19-61a6d0a084b1"
+    },
+    {
+      "audit_id": "01a18cfc-b613-7d52-8f59-7285655cf8c0",
+      "response_id": "chatcmpl-846a52c9ade42387",
+      "session_id": "01a18cfc-5f07-71ab-b3cb-19737629abd2"
+    },
+    {
+      "audit_id": "01a18cfd-2338-7903-9187-9593dd8dff86",
+      "response_id": "chatcmpl-91eb2fb6b898f146",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18d24-49ef-7280-b162-910e3996c476",
+      "response_id": "chatcmpl-bda0079258a12dac",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18d24-5aef-72d0-981c-1f6762cfc3ad",
+      "response_id": "chatcmpl-b95a7631e4f71886",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18d24-8506-7e73-bd4e-61ae1e562930",
+      "response_id": "chatcmpl-b6f5dc70b993950c",
+      "session_id": "01a18d24-51f0-7608-8a8c-a4545bc83312"
+    },
+    {
+      "audit_id": "01a18d24-c240-7202-ab02-aa38e3431c67",
+      "response_id": "chatcmpl-8e7b76f7f51a1260",
+      "session_id": "01a18d24-520c-709e-b871-7234ed00505b"
+    },
+    {
+      "audit_id": "01a18d24-eb48-7951-9a82-402e16c64f22",
+      "response_id": "chatcmpl-88dc478052858aac",
+      "session_id": "01a18d24-5233-739c-ad7a-187049410d07"
+    },
+    {
+      "audit_id": "01a18d24-9646-76d2-b9d0-d5d0ce331682",
+      "response_id": "chatcmpl-b0581fc36cebd090",
+      "session_id": "01a18d24-51f0-7608-8a8c-a4545bc83312"
+    },
+    {
+      "audit_id": "01a18d25-1621-7403-a83e-e8e16ba41d48",
+      "response_id": "chatcmpl-8498e1dc36b6bb19",
+      "session_id": "01a18d24-520c-709e-b871-7234ed00505b"
+    },
+    {
+      "audit_id": "01a18d25-38b5-7662-bd8a-7442669dbad3",
+      "response_id": "chatcmpl-968b8fca19bd60ae",
+      "session_id": "01a18d24-5233-739c-ad7a-187049410d07"
+    },
+    {
+      "audit_id": "01a18d25-855e-77a3-8484-7cf8784fa5da",
+      "response_id": "chatcmpl-a7a860a5ede4f4e1",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18d28-34a5-7430-a491-852f71107ba3",
+      "response_id": "chatcmpl-a70e99460f7f35c2",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18d28-6594-7e30-8a37-27bc335e22d4",
+      "response_id": "chatcmpl-9b78dcd7e53a6347",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18f45-b7da-74a1-b72f-279534a35bbe",
+      "response_id": "chatcmpl-9e74070f70af12b9",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18f45-ea2b-77e0-9634-2e99c264e20f",
+      "response_id": "chatcmpl-980d58fd37953bc1",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    },
+    {
+      "audit_id": "01a18f45-e4a1-7710-813d-68a26573734b",
+      "response_id": "chatcmpl-ab529da7019cddfd",
+      "session_id": "01a18f45-bf4b-71aa-b8bf-5a746a23ad61"
+    },
+    {
+      "audit_id": "01a18f47-29dc-7cb1-a73f-5055683e743c",
+      "response_id": "chatcmpl-aa4bff6001455ea5",
+      "session_id": "01a18f45-bf4b-71aa-b8bf-5a746a23ad61"
+    },
+    {
+      "audit_id": "01a18f47-5fbe-7273-9536-e1ca4d444c25",
+      "response_id": "chatcmpl-acec830f37ab994a",
+      "session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7"
+    }
+  ],
+  "native_oracle": {
+    "row_aliases_by_native_response_id": {
+      "chatcmpl-babae9a5664332e3": "01a18cfb-be42-7db0-9e3b-9d0b20fc7462",
+      "chatcmpl-a0dcb9ad191d2b65": "01a18cfb-d11e-7233-933a-661e3fe334d6",
+      "chatcmpl-995bcd1285fc3114": "01a18cfb-e7ec-7e73-8080-d01aedd641cf",
+      "chatcmpl-91cd007fbd82020d": "01a18cfc-0df4-7c91-99a7-59e150742158",
+      "chatcmpl-8628ec46cff3d36e": "01a18cfc-55dd-7aa0-bca4-e7abec478f88",
+      "chatcmpl-a592fa116fb87be7": "01a18cfc-6dd9-7de0-a694-402074481c03",
+      "chatcmpl-92863695e9be8be2": "01a18cfc-6f92-7ce2-8047-f1e1312582bb",
+      "chatcmpl-95934c13e0e4b9cc": "01a18cfc-6c94-7e71-bb2f-0624ea27ead1",
+      "chatcmpl-a1ee2e821d31b9bd": "01a18cfc-74d7-7201-83d5-c8c65213d901",
+      "chatcmpl-921f93fe64a4119e": "01a18cfc-fb5c-7b80-a891-3bdf73d4dd88",
+      "chatcmpl-85a43c763a82d1b9": "01a18cfc-7848-7ce0-bd45-756f0de147a3",
+      "chatcmpl-846a52c9ade42387": "01a18cfc-b613-7d52-8f59-7285655cf8c0",
+      "chatcmpl-91eb2fb6b898f146": "01a18cfd-2338-7903-9187-9593dd8dff86",
+      "chatcmpl-bda0079258a12dac": "01a18d24-49ef-7280-b162-910e3996c476",
+      "chatcmpl-b95a7631e4f71886": "01a18d24-5aef-72d0-981c-1f6762cfc3ad",
+      "chatcmpl-b6f5dc70b993950c": "01a18d24-8506-7e73-bd4e-61ae1e562930",
+      "chatcmpl-8e7b76f7f51a1260": "01a18d24-c240-7202-ab02-aa38e3431c67",
+      "chatcmpl-88dc478052858aac": "01a18d24-eb48-7951-9a82-402e16c64f22",
+      "chatcmpl-b0581fc36cebd090": "01a18d24-9646-76d2-b9d0-d5d0ce331682",
+      "chatcmpl-8498e1dc36b6bb19": "01a18d25-1621-7403-a83e-e8e16ba41d48",
+      "chatcmpl-968b8fca19bd60ae": "01a18d25-38b5-7662-bd8a-7442669dbad3",
+      "chatcmpl-a7a860a5ede4f4e1": "01a18d25-855e-77a3-8484-7cf8784fa5da",
+      "chatcmpl-a70e99460f7f35c2": "01a18d28-34a5-7430-a491-852f71107ba3",
+      "chatcmpl-9b78dcd7e53a6347": "01a18d28-6594-7e30-8a37-27bc335e22d4",
+      "chatcmpl-9e74070f70af12b9": "01a18f45-b7da-74a1-b72f-279534a35bbe",
+      "chatcmpl-980d58fd37953bc1": "01a18f45-ea2b-77e0-9634-2e99c264e20f",
+      "chatcmpl-ab529da7019cddfd": "01a18f45-e4a1-7710-813d-68a26573734b",
+      "chatcmpl-aa4bff6001455ea5": "01a18f47-29dc-7cb1-a73f-5055683e743c",
+      "chatcmpl-acec830f37ab994a": "01a18f47-5fbe-7273-9536-e1ca4d444c25"
+    },
+    "independent_edges": [
+      {
+        "kind": "sequence",
+        "source": "01a18cfb-be42-7db0-9e3b-9d0b20fc7462",
+        "target": "01a18cfb-d11e-7233-933a-661e3fe334d6"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfb-d11e-7233-933a-661e3fe334d6",
+        "target": "01a18cfb-e7ec-7e73-8080-d01aedd641cf"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfb-e7ec-7e73-8080-d01aedd641cf",
+        "target": "01a18cfc-0df4-7c91-99a7-59e150742158"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfc-0df4-7c91-99a7-59e150742158",
+        "target": "01a18cfc-55dd-7aa0-bca4-e7abec478f88"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfc-55dd-7aa0-bca4-e7abec478f88",
+        "target": "01a18cfc-6dd9-7de0-a694-402074481c03"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfc-6c94-7e71-bb2f-0624ea27ead1",
+        "target": "01a18cfc-fb5c-7b80-a891-3bdf73d4dd88"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfc-6f92-7ce2-8047-f1e1312582bb",
+        "target": "01a18cfc-7848-7ce0-bd45-756f0de147a3"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfc-74d7-7201-83d5-c8c65213d901",
+        "target": "01a18cfc-b613-7d52-8f59-7285655cf8c0"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfc-6dd9-7de0-a694-402074481c03",
+        "target": "01a18cfd-2338-7903-9187-9593dd8dff86"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18cfd-2338-7903-9187-9593dd8dff86",
+        "target": "01a18d24-49ef-7280-b162-910e3996c476"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d24-49ef-7280-b162-910e3996c476",
+        "target": "01a18d24-5aef-72d0-981c-1f6762cfc3ad"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d24-8506-7e73-bd4e-61ae1e562930",
+        "target": "01a18d24-9646-76d2-b9d0-d5d0ce331682"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d24-c240-7202-ab02-aa38e3431c67",
+        "target": "01a18d25-1621-7403-a83e-e8e16ba41d48"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d24-eb48-7951-9a82-402e16c64f22",
+        "target": "01a18d25-38b5-7662-bd8a-7442669dbad3"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d24-5aef-72d0-981c-1f6762cfc3ad",
+        "target": "01a18d25-855e-77a3-8484-7cf8784fa5da"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d25-855e-77a3-8484-7cf8784fa5da",
+        "target": "01a18d28-34a5-7430-a491-852f71107ba3"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d28-34a5-7430-a491-852f71107ba3",
+        "target": "01a18d28-6594-7e30-8a37-27bc335e22d4"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18d28-6594-7e30-8a37-27bc335e22d4",
+        "target": "01a18f45-b7da-74a1-b72f-279534a35bbe"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18f45-b7da-74a1-b72f-279534a35bbe",
+        "target": "01a18f45-ea2b-77e0-9634-2e99c264e20f"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18f45-e4a1-7710-813d-68a26573734b",
+        "target": "01a18f47-29dc-7cb1-a73f-5055683e743c"
+      },
+      {
+        "kind": "sequence",
+        "source": "01a18f45-ea2b-77e0-9634-2e99c264e20f",
+        "target": "01a18f47-5fbe-7273-9536-e1ca4d444c25"
+      },
+      {
+        "kind": "delegated_run_start",
+        "source": "01a18cfc-55dd-7aa0-bca4-e7abec478f88",
+        "target": "01a18cfc-6f92-7ce2-8047-f1e1312582bb"
+      },
+      {
+        "kind": "delegated_run_start",
+        "source": "01a18cfc-55dd-7aa0-bca4-e7abec478f88",
+        "target": "01a18cfc-6c94-7e71-bb2f-0624ea27ead1"
+      },
+      {
+        "kind": "delegated_run_start",
+        "source": "01a18cfc-55dd-7aa0-bca4-e7abec478f88",
+        "target": "01a18cfc-74d7-7201-83d5-c8c65213d901"
+      },
+      {
+        "kind": "delegated_run_start",
+        "source": "01a18d24-49ef-7280-b162-910e3996c476",
+        "target": "01a18d24-8506-7e73-bd4e-61ae1e562930"
+      },
+      {
+        "kind": "delegated_run_start",
+        "source": "01a18d24-49ef-7280-b162-910e3996c476",
+        "target": "01a18d24-c240-7202-ab02-aa38e3431c67"
+      },
+      {
+        "kind": "delegated_run_start",
+        "source": "01a18d24-49ef-7280-b162-910e3996c476",
+        "target": "01a18d24-eb48-7951-9a82-402e16c64f22"
+      },
+      {
+        "kind": "delegated_run_start",
+        "source": "01a18f45-b7da-74a1-b72f-279534a35bbe",
+        "target": "01a18f45-e4a1-7710-813d-68a26573734b"
+      },
+      {
+        "kind": "result_dependency",
+        "source": "01a18cfc-b613-7d52-8f59-7285655cf8c0",
+        "target": "01a18cfd-2338-7903-9187-9593dd8dff86"
+      },
+      {
+        "kind": "result_dependency",
+        "source": "01a18cfc-7848-7ce0-bd45-756f0de147a3",
+        "target": "01a18cfd-2338-7903-9187-9593dd8dff86"
+      },
+      {
+        "kind": "result_dependency",
+        "source": "01a18cfc-fb5c-7b80-a891-3bdf73d4dd88",
+        "target": "01a18cfd-2338-7903-9187-9593dd8dff86"
+      },
+      {
+        "kind": "result_dependency",
+        "source": "01a18d24-9646-76d2-b9d0-d5d0ce331682",
+        "target": "01a18d25-855e-77a3-8484-7cf8784fa5da"
+      },
+      {
+        "kind": "result_dependency",
+        "source": "01a18d25-38b5-7662-bd8a-7442669dbad3",
+        "target": "01a18d25-855e-77a3-8484-7cf8784fa5da"
+      },
+      {
+        "kind": "result_dependency",
+        "source": "01a18d25-1621-7403-a83e-e8e16ba41d48",
+        "target": "01a18d25-855e-77a3-8484-7cf8784fa5da"
+      },
+      {
+        "kind": "result_dependency",
+        "source": "01a18f47-29dc-7cb1-a73f-5055683e743c",
+        "target": "01a18f47-5fbe-7273-9536-e1ca4d444c25"
+      }
+    ],
+    "native_basis": {
+      "parent_session_id": "01a18cfb-18c9-7047-98d0-9b84f6e0ccf7",
+      "consumption_requests": [
+        {
+          "response_id": "chatcmpl-91eb2fb6b898f146",
+          "audit_id": "01a18cfd-2338-7903-9187-9593dd8dff86",
+          "dependency_run_ids": [
+            "8ccc4dab-4c91-43b5-bfb6-5d0c24519c88",
+            "2cab92e5-537d-40b0-9431-324b66961ccb",
+            "65d8fd74-26be-4327-8127-3e17e78ffecc"
+          ]
+        },
+        {
+          "response_id": "chatcmpl-a7a860a5ede4f4e1",
+          "audit_id": "01a18d25-855e-77a3-8484-7cf8784fa5da",
+          "dependency_run_ids": [
+            "f3e53b45-7035-4ee7-816e-23e417e8658f",
+            "fd44a4de-45fb-457a-8a35-32329b9f7c8c",
+            "f6a67d7d-8ffd-40b3-b46e-5dda24b0d1eb"
+          ]
+        },
+        {
+          "response_id": "chatcmpl-acec830f37ab994a",
+          "audit_id": "01a18f47-5fbe-7273-9536-e1ca4d444c25",
+          "dependency_run_ids": [
+            "2d3c33b1-713f-497a-8015-28156e330eea"
+          ]
+        }
+      ],
+      "basis": "Each sequence edge is the previous assistant response in the same native Pi session branch. Each launch edge joins an exact parent subagent tool call to the first native child request via the pinned run status identity. Each result edge joins the unique terminal subagent-notify present after the preceding assistant response in the receiving native parentId ancestry to the child run exact completion marker; its keyed preview was also found in that captured provider request body. No mutable latest workflow child inventory selects consumed runs."
+    },
+    "trace_node_aliases": [
+      "01a18cfb-be42-7db0-9e3b-9d0b20fc7462",
+      "01a18cfb-d11e-7233-933a-661e3fe334d6",
+      "01a18cfb-e7ec-7e73-8080-d01aedd641cf",
+      "01a18cfc-0df4-7c91-99a7-59e150742158",
+      "01a18cfc-55dd-7aa0-bca4-e7abec478f88",
+      "01a18cfc-6dd9-7de0-a694-402074481c03",
+      "01a18cfc-6f92-7ce2-8047-f1e1312582bb",
+      "01a18cfc-6c94-7e71-bb2f-0624ea27ead1",
+      "01a18cfc-74d7-7201-83d5-c8c65213d901",
+      "01a18cfc-fb5c-7b80-a891-3bdf73d4dd88",
+      "01a18cfc-7848-7ce0-bd45-756f0de147a3",
+      "01a18cfc-b613-7d52-8f59-7285655cf8c0",
+      "01a18cfd-2338-7903-9187-9593dd8dff86",
+      "01a18d24-49ef-7280-b162-910e3996c476",
+      "01a18d24-5aef-72d0-981c-1f6762cfc3ad",
+      "01a18d24-8506-7e73-bd4e-61ae1e562930",
+      "01a18d24-c240-7202-ab02-aa38e3431c67",
+      "01a18d24-eb48-7951-9a82-402e16c64f22",
+      "01a18d24-9646-76d2-b9d0-d5d0ce331682",
+      "01a18d25-1621-7403-a83e-e8e16ba41d48",
+      "01a18d25-38b5-7662-bd8a-7442669dbad3",
+      "01a18d25-855e-77a3-8484-7cf8784fa5da",
+      "01a18d28-34a5-7430-a491-852f71107ba3",
+      "01a18d28-6594-7e30-8a37-27bc335e22d4",
+      "01a18f45-b7da-74a1-b72f-279534a35bbe",
+      "01a18f45-ea2b-77e0-9634-2e99c264e20f",
+      "01a18f45-e4a1-7710-813d-68a26573734b",
+      "01a18f47-29dc-7cb1-a73f-5055683e743c",
+      "01a18f47-5fbe-7273-9536-e1ca4d444c25"
+    ],
+    "expected_diagnostics_by_seed": {
+      "01a18cfb-be42-7db0-9e3b-9d0b20fc7462": [],
+      "01a18cfb-d11e-7233-933a-661e3fe334d6": [],
+      "01a18cfb-e7ec-7e73-8080-d01aedd641cf": [],
+      "01a18cfc-0df4-7c91-99a7-59e150742158": [],
+      "01a18cfc-55dd-7aa0-bca4-e7abec478f88": [],
+      "01a18cfc-6dd9-7de0-a694-402074481c03": [],
+      "01a18cfc-6f92-7ce2-8047-f1e1312582bb": [],
+      "01a18cfc-6c94-7e71-bb2f-0624ea27ead1": [],
+      "01a18cfc-74d7-7201-83d5-c8c65213d901": [],
+      "01a18cfc-fb5c-7b80-a891-3bdf73d4dd88": [],
+      "01a18cfc-7848-7ce0-bd45-756f0de147a3": [],
+      "01a18cfc-b613-7d52-8f59-7285655cf8c0": [],
+      "01a18cfd-2338-7903-9187-9593dd8dff86": [],
+      "01a18d24-49ef-7280-b162-910e3996c476": [],
+      "01a18d24-5aef-72d0-981c-1f6762cfc3ad": [],
+      "01a18d24-8506-7e73-bd4e-61ae1e562930": [],
+      "01a18d24-c240-7202-ab02-aa38e3431c67": [],
+      "01a18d24-eb48-7951-9a82-402e16c64f22": [],
+      "01a18d24-9646-76d2-b9d0-d5d0ce331682": [],
+      "01a18d25-1621-7403-a83e-e8e16ba41d48": [],
+      "01a18d25-38b5-7662-bd8a-7442669dbad3": [],
+      "01a18d25-855e-77a3-8484-7cf8784fa5da": [],
+      "01a18d28-34a5-7430-a491-852f71107ba3": [],
+      "01a18d28-6594-7e30-8a37-27bc335e22d4": [],
+      "01a18f45-b7da-74a1-b72f-279534a35bbe": [],
+      "01a18f45-ea2b-77e0-9634-2e99c264e20f": [],
+      "01a18f45-e4a1-7710-813d-68a26573734b": [],
+      "01a18f47-29dc-7cb1-a73f-5055683e743c": [],
+      "01a18f47-5fbe-7273-9536-e1ca4d444c25": []
+    }
+  }
+}

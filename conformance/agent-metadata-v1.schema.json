@@ -36,6 +36,12 @@
           "items": { "$ref": "#/$defs/dependency" }
         }
       ]
+    },
+    "child_launches": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/childLaunchReceipt" }
     }
   },
   "$defs": {
@@ -111,6 +117,18 @@
           "anyOf": [{ "required": ["stream_id"] }, { "required": ["response_id"] }]
         }
       ]
+    },
+    "childLaunchReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parent_response_id", "tool_call_id", "child_session_id", "run_id", "last_response_id"],
+      "properties": {
+        "parent_response_id": { "$ref": "#/$defs/nativeId" },
+        "tool_call_id": { "$ref": "#/$defs/nativeId" },
+        "child_session_id": { "$ref": "#/$defs/nativeId" },
+        "run_id": { "$ref": "#/$defs/nativeId" },
+        "last_response_id": { "$ref": "#/$defs/nativeId" }
+      }
     }
   }
 }

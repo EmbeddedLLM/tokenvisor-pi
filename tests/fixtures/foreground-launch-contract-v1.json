@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "normal-returned-output",
+      "observation_window": ["parent-response-1", "parent-response-2"],
+      "requests": [
+        { "key": "parent-1", "session_id": "pi:session:parent-a", "response_id": "parent-response-1", "stream_id": "parent-stream-1", "previous_response_id": null },
+        { "key": "child-1", "session_id": "pi:session:child-a", "response_id": "child-response-1", "stream_id": "child-stream-1", "previous_response_id": null },
+        { "key": "parent-2", "session_id": "pi:session:parent-a", "response_id": "parent-response-2", "stream_id": "parent-stream-2", "previous_response_id": "parent-response-1" }
+      ],
+      "native_launches": [
+        { "parent_response_id": "parent-response-1", "tool_call_id": "call-a", "child_session_id": "pi:session:child-a", "run_id": "run-a", "last_response_id": "child-response-1" }
+      ],
+      "expected": {
+        "inventory": ["parent-1", "child-1", "parent-2"],
+        "session_groups": {
+          "pi:session:parent-a": ["parent-1", "parent-2"],
+          "pi:session:child-a": ["child-1"]
+        },
+        "execution_groups": {
+          "run-a": ["child-1"]
+        },
+        "launch_edges": [
+          { "parent_request": "parent-1", "child_execution": "run-a", "tool_call_id": "call-a" }
+        ],
+        "delivery_edges": [
+          { "child_request": "child-1", "parent_request": "parent-2" }
+        ]
+      }
+    },
+    {
+      "name": "filtered-result-retains-launch",
+      "observation_window": ["parent-response-1", "parent-response-2"],
+      "requests": [
+        { "key": "parent-1", "session_id": "pi:session:parent-b", "response_id": "parent-response-1", "stream_id": "parent-stream-1", "previous_response_id": null },
+        { "key": "child-1", "session_id": "pi:session:child-b", "response_id": "child-response-1", "stream_id": "child-stream-1", "previous_response_id": null },
+        { "key": "parent-2", "session_id": "pi:session:parent-b", "response_id": "parent-response-2", "stream_id": "parent-stream-2", "previous_response_id": "parent-response-1" }
+      ],
+      "native_launches": [
+        { "parent_response_id": "parent-response-1", "tool_call_id": "call-b", "child_session_id": "pi:session:child-b", "run_id": "run-b", "last_response_id": "child-response-1" }
+      ],
+      "expected": {
+        "inventory": ["parent-1", "child-1", "parent-2"],
+        "session_groups": {
+          "pi:session:parent-b": ["parent-1", "parent-2"],
+          "pi:session:child-b": ["child-1"]
+        },
+        "execution_groups": {
+          "run-b": ["child-1"]
+        },
+        "launch_edges": [
+          { "parent_request": "parent-1", "child_execution": "run-b", "tool_call_id": "call-b" }
+        ],
+        "delivery_edges": []
+      }
+    },
+    {
+      "name": "multi-inference-child-span",
+      "observation_window": ["parent-response-1", "parent-response-2"],
+      "requests": [
+        { "key": "parent-1", "session_id": "pi:session:parent-c", "response_id": "parent-response-1", "stream_id": "parent-stream-1", "previous_response_id": null },
+        { "key": "child-1", "session_id": "pi:session:child-c", "response_id": "child-response-1", "stream_id": "child-stream-1", "previous_response_id": null },
+        { "key": "child-2", "session_id": "pi:session:child-c", "response_id": "child-response-2", "stream_id": "child-stream-2", "previous_response_id": "child-response-1" },
+        { "key": "parent-2", "session_id": "pi:session:parent-c", "response_id": "parent-response-2", "stream_id": "parent-stream-2", "previous_response_id": "parent-response-1" }
+      ],
+      "native_launches": [
+        { "parent_response_id": "parent-response-1", "tool_call_id": "call-c", "child_session_id": "pi:session:child-c", "run_id": "run-c", "last_response_id": "child-response-2" }
+      ],
+      "expected": {
+        "inventory": ["parent-1", "child-1", "child-2", "parent-2"],
+        "session_groups": {
+          "pi:session:parent-c": ["parent-1", "parent-2"],
+          "pi:session:child-c": ["child-1", "child-2"]
+        },
+        "execution_groups": {
+          "run-c": ["child-1", "child-2"]
+        },
+        "launch_edges": [
+          { "parent_request": "parent-1", "child_execution": "run-c", "tool_call_id": "call-c" }
+        ],
+        "delivery_edges": [
+          { "child_request": "child-2", "parent_request": "parent-2" }
+        ]
+      }
+    },
+    {
+      "name": "reused-role-distinct-native-children",
+      "observation_window": ["parent-response-1", "parent-response-2"],
+      "requests": [
+        { "key": "parent-1", "session_id": "pi:session:parent-d", "response_id": "parent-response-1", "stream_id": "parent-stream-1", "previous_response_id": null },
+        { "key": "child-1", "session_id": "pi:session:child-d1", "response_id": "child-response-1", "stream_id": "child-stream-1", "previous_response_id": null, "display_role": "worker" },
+        { "key": "child-2", "session_id": "pi:session:child-d2", "response_id": "child-response-2", "stream_id": "child-stream-2", "previous_response_id": null, "display_role": "worker" },
+        { "key": "parent-2", "session_id": "pi:session:parent-d", "response_id": "parent-response-2", "stream_id": "parent-stream-2", "previous_response_id": "parent-response-1" }
+      ],
+      "native_launches": [
+        { "parent_response_id": "parent-response-1", "tool_call_id": "call-d1", "child_session_id": "pi:session:child-d1", "run_id": "run-d1", "last_response_id": "child-response-1" },
+        { "parent_response_id": "parent-response-1", "tool_call_id": "call-d2", "child_session_id": "pi:session:child-d2", "run_id": "run-d2", "last_response_id": "child-response-2" }
+      ],
+      "expected": {
+        "inventory": ["parent-1", "child-1", "child-2", "parent-2"],
+        "session_groups": {
+          "pi:session:parent-d": ["parent-1", "parent-2"],
+          "pi:session:child-d1": ["child-1"],
+          "pi:session:child-d2": ["child-2"]
+        },
+        "execution_groups": {
+          "run-d1": ["child-1"],
+          "run-d2": ["child-2"]
+        },
+        "launch_edges": [
+          { "parent_request": "parent-1", "child_execution": "run-d1", "tool_call_id": "call-d1" },
+          { "parent_request": "parent-1", "child_execution": "run-d2", "tool_call_id": "call-d2" }
+        ],
+        "delivery_edges": [
+          { "child_request": "child-1", "parent_request": "parent-2" },
+          { "child_request": "child-2", "parent_request": "parent-2" }
+        ]
+      }
+    }
+  ]
+}

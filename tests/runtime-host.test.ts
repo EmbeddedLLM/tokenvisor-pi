@@ -10,7 +10,6 @@ import {
   readPiHarnessVersion,
   readPiSubagentRunnerVersion,
   resolvePiSubagentPackageRoot,
-  supportsAgentMetadataCapture,
 } from "../src/capture/runtime-host.ts";
 
 describe("runtime host identification", () => {
@@ -33,11 +32,11 @@ describe("runtime host identification", () => {
     }
   });
 
-  test("rejects absent markers, a stale runner PID, and an unpinned package root", () => {
+  test("rejects absent markers, a stale runner PID, and a package root with the wrong identity", () => {
     const root = mkdtempSync(join(tmpdir(), "tokenvisor-pi-runner-reject-"));
     try {
       writeFileSync(join(root, "package.json"), JSON.stringify({
-        name: "@earendil-works/pi-coding-agent",
+        name: "@earendil-works/not-pi-coding-agent",
         version: "1.5.0",
       }));
       const env = {
@@ -105,7 +104,7 @@ describe("runtime host identification", () => {
     })).toBe(false);
   });
 
-  test("uses verified manifests and executable version output for envelope host versions", () => {
+  test("records actual host and runner versions from verified manifests and executable output", () => {
     const root = mkdtempSync(join(tmpdir(), "tokenvisor-pi-version-facts-"));
     try {
       const piRoot = join(root, "node_modules", "@earendil-works", "pi-coding-agent");
@@ -120,13 +119,7 @@ describe("runtime host identification", () => {
       writeFileSync(runnerEntry, "");
       expect(readPiHarnessVersion(piEntry)).toBe("1.4.0");
       expect(readPiSubagentRunnerVersion(runnerEntry)).toBe("0.83.0");
-      expect(supportsAgentMetadataCapture("pi", "1.4.0")).toBe(true);
-      expect(supportsAgentMetadataCapture("pi", "1.4.0", undefined, true)).toBe(false);
-      expect(supportsAgentMetadataCapture("pi", "1.4.0", "0.83.0", true)).toBe(true);
-      expect(supportsAgentMetadataCapture("pi", null)).toBe(false);
-      expect(supportsAgentMetadataCapture("pi", "1.5.0")).toBe(false);
-      expect(supportsAgentMetadataCapture("omp", "18.12.6")).toBe(true);
-      expect(supportsAgentMetadataCapture("omp", null)).toBe(false);
+      expect(readPiHarnessVersion(piEntry)).toBe("1.4.0");
       expect(readPiHarnessVersion(join(root, "unverified.js"))).toBeNull();
       writeFileSync(join(runnerRoot, "package.json"), JSON.stringify({ name: "pi-subagents", version: "0.84.0" }));
       expect(readPiSubagentRunnerVersion(runnerEntry)).toBe("0.84.0");

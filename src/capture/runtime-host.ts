@@ -3,9 +3,6 @@ import { readFileSync, realpathSync } from "fs";
 import { basename, dirname, join, relative, resolve } from "path";
 
 export type RuntimeHost = "pi" | "omp";
-export const PI_HOST_VERSION = "1.4.0";
-export const OMP_HOST_VERSION = "18.12.6";
-export const PI_SUBAGENTS_VERSION = "0.83.0";
 const ompVersionCache = new Map<string, string | null>();
 
 interface NativeSessionHeaderLike {
@@ -44,11 +41,8 @@ export function resolvePiSubagentPackageRoot(
     const canonical = realpathSync(packageRoot);
     const packageInfo = JSON.parse(readFileSync(resolve(canonical, "package.json"), "utf8")) as {
       name?: unknown;
-      version?: unknown;
     };
-    return packageInfo.name === "@earendil-works/pi-coding-agent" && packageInfo.version === PI_HOST_VERSION
-      ? canonical
-      : null;
+    return packageInfo.name === "@earendil-works/pi-coding-agent" ? canonical : null;
   } catch {
     return null;
   }
@@ -117,20 +111,12 @@ export function parseOmpVersionOutput(output: string): string | null {
   return /^omp\/(\d+\.\d+\.\d+)$/m.exec(output.trim())?.[1] ?? null;
 }
 
-export function supportsAgentMetadataCapture(
-  host: RuntimeHost,
-  harnessVersion: string | null,
-  runnerVersion?: string | null,
-  piChildRuntime = false,
-): boolean {
-  if (host === "omp") return harnessVersion === OMP_HOST_VERSION;
-  return harnessVersion === PI_HOST_VERSION && (!piChildRuntime || runnerVersion === PI_SUBAGENTS_VERSION);
-}
-
 function readPackageVersion(packageRoot: string, expectedName: string): string | null {
   try {
     const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
-    return manifest.name === expectedName && typeof manifest.version === "string" ? manifest.version : null;
+    return manifest.name === expectedName && typeof manifest.version === "string" && manifest.version.length > 0
+      ? manifest.version
+      : null;
   } catch {
     return null;
   }

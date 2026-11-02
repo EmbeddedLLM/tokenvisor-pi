@@ -24,7 +24,7 @@
       "agentUrlId": "CompulsoryMoose",
       "route": "agent://child"
     },
-    "privacy": "Native UUIDs and tool call IDs are replaced with fixture aliases. Prompts, task arguments, message bodies, result text, API payloads, auth data, costs, and local file paths are omitted. Empty native content arrays indicate intentionally excluded content. Native branch entry IDs, response IDs, and tool-call IDs use consistent aliases; result payload presence is retained with a redacted sentinel. Native ancestry and entry shapes are preserved."
+    "privacy": "Native UUIDs and tool call IDs are replaced with fixture aliases. Prompts, task arguments, message bodies, result text, API payloads, auth data, costs, and local file paths are omitted. Empty native content arrays indicate intentionally excluded content. Native branch entry IDs, response IDs, and tool-call IDs use consistent aliases; result payload presence is retained with a redacted sentinel. Native ancestry and entry shapes are preserved. Synthetic qualification payloads below are separate non-human test strings and do not restore omitted historical content."
   },
   "nativeFacts": {
     "taskProgress": {
@@ -112,6 +112,23 @@
       "timestamp": "2026-10-29T06:49:50.490Z"
     }
   ],
+  "syntheticQualification": {
+    "kind": "source-backed-synthetic-payloads",
+    "nativeSourceCommit": "45c35e40c46166dc726ccc52f5d27f40f2449f99",
+    "scope": "The historical snapshots remain redacted and cannot prove result-to-response consumption. These separate safe strings exercise the pinned task-summary formatter and plain wake relay contract only.",
+    "firstTask": {
+      "responseText": "Synthetic task result A",
+      "resultText": "<task-result id=\"CompulsoryMoose\" agent=\"scout\" status=\"completed\" duration=\"1m\">\n<output>\nSynthetic task result A\n</output>\n</task-result>",
+      "responseSha256": "265a20821a15d9abae0a1330d4577be06d0b1e94e8d7f252aa50476c8450d1ee",
+      "resultTextSha256": "9c3a0607de47116a8273d34cc188e94cdd861f2b4370d6b53ffb4f33d2b41a57"
+    },
+    "followupWake": {
+      "responseText": "Synthetic wake result B",
+      "resultText": "Synthetic wake result B",
+      "responseSha256": "40a8482619273ee717882a1ee113635a1f5f789740e32f076d44bc3c1d690409",
+      "resultTextSha256": "40a8482619273ee717882a1ee113635a1f5f789740e32f076d44bc3c1d690409"
+    }
+  },
   "snapshots": [
     {
       "name": "first-wait",
@@ -181,7 +198,7 @@
         "timestamp": 1793256556678
       },
       "availableCompletionResponseIds": ["child-completion-first"],
-      "expectedDependency": {
+      "candidateCompletion": {
         "runId": "omp:task:CompulsoryMoose",
         "session": "child",
         "responseId": "child-completion-first"
@@ -1232,7 +1249,7 @@
         "child-completion-first",
         "child-completion-followup"
       ],
-      "expectedDependency": {
+      "candidateCompletion": {
         "runId": "omp:task:CompulsoryMoose",
         "session": "child",
         "responseId": "child-completion-followup"
@@ -2368,7 +2385,7 @@
     "firstSnapshotHasOnlyFirstMarker": true,
     "secondSnapshotHasBothMarkers": true,
     "parentConsumersAreDistinct": true,
-    "expectedResponseIds": [
+    "completionMarkerResponseIds": [
       "child-completion-first",
       "child-completion-followup"
     ]

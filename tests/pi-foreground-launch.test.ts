@@ -1,0 +1,1680 @@
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { createHash } from "crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { dirname, join } from "path";
+import tokenVisorProvider from "../extensions/tokenvisor-provider.ts";
+import { parseAgentMetadata } from "../src/capture/shared.ts";
+import {
+  makePiCompactionRecord,
+  PI_COMPACTION_ENTRY,
+  PI_RESULT_CONSUMPTION_ENTRY,
+  readPiForegroundLaunchEvidence,
+  readPiPendingChildLaunchReceipts,
+} from "../src/capture/pi.ts";
+import {
+  clearOmpEarlyTaskBindingsForSession,
+  clearOmpTaskBindingRetirementsForSession,
+  getOmpRuntimeCaptureState,
+  OMP_RUN_COMPLETION_ENTRY,
+  readOmpEarlyTaskDelegation,
+} from "../src/capture/omp.ts";
+
+mock.module("@oh-my-pi/pi-ai/providers/openai-completions", () => ({
+  streamOpenAICompletions: (model: unknown, context: unknown, options: unknown) => {
+    (globalThis as any).__OMP_PROVIDER_OPTIONS__ = options;
+    (globalThis as any).__OMP_PROVIDER_REQUESTS__ ??= [];
+    (globalThis as any).__OMP_PROVIDER_REQUESTS__.push({ model, context, options });
+    return { result: () => Promise.resolve((globalThis as any).__OMP_PROVIDER_RESULT__ ?? { responseId: "omp-response", stopReason: "stop", content: [] }) };
+  },
+}));
+
+const savedEnv = { ...process.env };
+const savedArgv = process.argv;
+const savedFetch = globalThis.fetch;
+const tempRoots: string[] = [];
+const backgroundPreviewFixture = JSON.parse(readFileSync(
+  new URL("./fixtures/pi-native-background-preview-v1.json", import.meta.url), "utf8",
+)) as any;
+
+afterEach(() => {
+  globalThis.fetch = savedFetch;
+  (globalThis as any).__PI_FOREGROUND_RESULT__ = undefined;
+  (globalThis as any).__PI_FOREGROUND_OPTIONS__ = undefined;
+  (globalThis as any).__PI_TEST_STREAM_RESULT__ = undefined;
+  (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__ = undefined;
+  (globalThis as any).__PI_CAPTURED_REQUEST__ = undefined;
+  (globalThis as any).__PI_CAPTURED_CALLS__ = 0;
+  (globalThis as any).__OMP_PROVIDER_OPTIONS__ = undefined;
+  (globalThis as any).__OMP_PROVIDER_REQUESTS__ = undefined;
+  (globalThis as any).__OMP_PROVIDER_RESULT__ = undefined;
+  for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+  Object.assign(process.env, savedEnv);
+  process.argv = savedArgv;
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function writeSession(file: string, header: Record<string, unknown>, entries: any[]): void {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, [header, ...entries].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+}
+
+async function createHarness(subagentsVersion = "0.83.0") {
+  const root = mkdtempSync(join(tmpdir(), "tokenvisor-pi-foreground-test-"));
+  tempRoots.push(root);
+  const host = join(root, "node_modules", "@earendil-works", "pi-coding-agent");
+  const ai = join(root, "node_modules", "@earendil-works", "pi-ai");
+  const subagents = join(root, "npm", "node_modules", "pi-subagents");
+  for (const path of [join(host, "dist"), join(ai, "dist", "api"), join(subagents, "bundle"), join(subagents, "src", "runs", "background")]) {
+    mkdirSync(path, { recursive: true });
+  }
+  writeFileSync(join(host, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "1.4.0" }));
+  writeFileSync(join(host, "dist", "cli.js"), "");
+  writeFileSync(join(ai, "package.json"), JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.4.0", type: "module" }));
+  writeFileSync(join(ai, "dist", "api", "openai-completions.js"),
+    'export function streamSimple(model, context, options) { globalThis.__PI_FOREGROUND_OPTIONS__ = options; globalThis.__PI_CAPTURED_REQUEST__ = { model, context, options }; globalThis.__PI_CAPTURED_CALLS__ = (globalThis.__PI_CAPTURED_CALLS__ || 0) + 1; const terminal = globalThis.__PI_FOREGROUND_RESULT__; return { result: () => Promise.resolve(terminal) }; }');
+  writeFileSync(join(subagents, "package.json"), JSON.stringify({
+    name: "pi-subagents", version: subagentsVersion, type: "module",
+    exports: { "./required-child-extensions": "./bundle/required-child-extensions.js" },
+  }));
+  writeFileSync(join(subagents, "bundle", "required-child-extensions.js"), "export function registerRequiredChildExtensions() { return { dispose() {} }; }");
+  writeFileSync(join(subagents, "src", "runs", "background", "subagent-runner-bootstrap.js"), "");
+
+  process.env.PI_CODING_AGENT_DIR = root;
+  process.env.TOKENVISOR_API_KEY = "synthetic-key";
+  process.env.TOKENVISOR_BASE_URL = "http://127.0.0.1:1/api/v1";
+  delete process.env.PI_SUBAGENT_CHILD;
+  delete process.env.PI_SUBAGENT_RUNNER_PID;
+  process.argv = [process.execPath, join(host, "dist", "cli.js")];
+  globalThis.fetch = async () => Response.json({ data: [{ id: "synthetic", type: "chat", capabilities: [] }] });
+
+  const hooks = new Map<string, (event: any, ctx: any) => unknown>();
+  let providerConfig: any;
+  const branches = new Map<string, any[]>();
+  const files = new Map<string, string>();
+  const headers = new Map<string, any>();
+  const failAppendTypes = new Set<string>();
+  const sessionContext = (sessionId: string) => ({ sessionManager: {
+    getSessionId: () => sessionId,
+    getSessionFile: () => files.get(sessionId),
+    getHeader: () => headers.get(sessionId),
+    getBranch: () => branches.get(sessionId) ?? [],
+  } });
+  const appended: any[] = [];
+  await tokenVisorProvider({
+    on: (name: string, handler: any) => hooks.set(name, handler),
+    events: { on: () => () => {}, emit: () => {} },
+    registerCommand: () => {},
+    registerProvider: (_name: string, config: any) => { providerConfig = config; },
+    appendEntry: (customType: string, data: any) => {
+      if (failAppendTypes.has(customType)) throw new Error("synthetic append failure");
+      const sessionId = currentSession;
+      if (!sessionId) throw new Error("missing current test session");
+      const branch = branches.get(sessionId)!;
+      const entry = { type: "custom_message", id: `custom-${appended.length}`, parentId: branch.at(-1)?.id, customType, data };
+      appended.push(entry);
+      branch.push(entry);
+    },
+  } as any);
+  let currentSession: string | null = null;
+  const appendFor = (sessionId: string) => { currentSession = sessionId; };
+  return { root, hooks, providerConfig, branches, files, headers, sessionContext, appended, appendFor, failAppendTypes };
+}
+
+describe("Pi foreground launch receipts", () => {
+  test("resolves only the exact pinned long background preview through the registered provider", async () => {
+    const h = await createHarness();
+    const fixture = backgroundPreviewFixture;
+    const rootId = fixture.parent_session_id;
+    const childId = fixture.child_session_id;
+    const runId = fixture.run_id;
+    const agent = fixture.agent;
+    const sessionsRoot = join(h.root, "sessions");
+    const parentFile = join(sessionsRoot, "root.jsonl");
+    const childFile = join(sessionsRoot, "root", runId, "run-0", "session.jsonl");
+    const asyncDir = join(h.root, "async-subagent-runs", runId);
+    const nativeSessionDir = join(sessionsRoot, "root", runId, `async-${runId}`);
+    const artifactsDir = join(sessionsRoot, "subagent-artifacts");
+    const artifactFile = join(artifactsDir, `${runId}_${agent}_output.md`);
+    process.env.PI_SUBAGENTS_TEMP_ROOT = h.root;
+
+    const parentCall = { type: "message", id: "parent-call-entry", message: {
+      role: "assistant", responseId: fixture.parent_response_id, stopReason: "toolUse",
+      content: [{ type: "toolCall", id: fixture.tool_call_id, name: "subagent", arguments: {} }],
+    } };
+    const parentResult = { type: "message", id: "parent-result-entry", message: {
+      role: "toolResult", toolName: "subagent", toolCallId: fixture.tool_call_id, isError: false,
+      content: [{ type: "text", text: "Background task started" }], details: { runId, toolCallId: fixture.tool_call_id },
+    } };
+    const parentHeader = { type: "session", id: rootId };
+    const childHeader = { type: "session", id: childId, parentSession: parentFile };
+    mkdirSync(dirname(parentFile), { recursive: true });
+    mkdirSync(dirname(childFile), { recursive: true });
+    mkdirSync(asyncDir, { recursive: true });
+    mkdirSync(nativeSessionDir, { recursive: true });
+    mkdirSync(artifactsDir, { recursive: true });
+
+    const normalizedOutput = "H".repeat(fixture.normalized_output_shape.ascii_prefix_characters) + "\n" +
+      fixture.normalized_output_shape.unicode_segment +
+      "x".repeat(fixture.normalized_output_shape.ascii_suffix_characters);
+    expect(normalizedOutput.length).toBe(fixture.expected.normalized_utf16_code_units);
+    expect(Buffer.byteLength(normalizedOutput, "utf8")).toBe(fixture.expected.normalized_utf8_bytes);
+    const rawOutput = `${normalizedOutput}\n\`\`\`acceptance-report\nsynthetic acceptance footer\n\`\`\``;
+    const writeChild = (output: string, responseId = fixture.terminal_response_id, markerId = responseId) => {
+      writeSession(childFile, childHeader, [
+        { type: "message", id: "child-terminal-entry", message: {
+          role: "assistant", responseId, stopReason: "stop", content: [{ type: "text", text: output }],
+        } },
+        { type: "custom", id: "completion-entry", customType: "tokenvisor-agent-run-completion-v1", data: {
+          runId, sessionId: childId, responseId: markerId,
+        } },
+      ]);
+    };
+    const writeStatus = (artifactDirectory = artifactsDir, overrides: Record<string, unknown> = {}) => writeFileSync(join(asyncDir, "status.json"), JSON.stringify({
+      lifecycleArtifactVersion: 3,
+      runId,
+      toolCallId: fixture.tool_call_id,
+      sessionId: parentFile,
+      sessionFile: childFile,
+      state: "complete",
+      mode: "single",
+      artifactsDir: artifactDirectory,
+      sessionDir: nativeSessionDir,
+      steps: [{ sessionFile: childFile, agent, exitCode: 0 }],
+      ...overrides,
+    }));
+    const writeNotice = (preview: string, noticeRunId = runId, pointerSessionFile = childFile) => {
+      const notice = {
+        type: "custom_message",
+        id: "background-notice",
+        customType: "subagent-notify",
+        details: { runs: [{
+          runId: noticeRunId,
+          status: "completed",
+          agent,
+          asyncDir,
+          sessionLabel: "Session file",
+          sessionValue: pointerSessionFile,
+        }] },
+        content: `Background task completed: **${agent}**\n\n${agent}:\n${preview}\n\n` +
+          `Retention-managed async directory: ${asyncDir}\n\nSession file: ${pointerSessionFile}\n\n` +
+          `Parent action: ${fixture.tool_call_id}`,
+      };
+      return writeNoticeEntry(notice);
+    };
+    function writeNoticeEntry(notice: any) {
+      const parentEntries = [parentCall, parentResult, notice];
+      writeSession(parentFile, parentHeader, parentEntries);
+      h.files.set(rootId, parentFile);
+      h.headers.set(rootId, parentHeader);
+      h.branches.set(rootId, parentEntries);
+      return notice;
+    }
+    const streamMetadata = async (effectiveNoticeContent: string) => {
+      const headers = new Headers();
+      const ctx = h.sessionContext(rootId);
+      h.hooks.get("before_provider_headers")!({ headers }, ctx);
+      (globalThis as any).__PI_FOREGROUND_RESULT__ = { responseId: "carrier-response", stopReason: "stop", content: [] };
+      (globalThis as any).__PI_TEST_STREAM_RESULT__ = (globalThis as any).__PI_FOREGROUND_RESULT__;
+      await h.providerConfig.streamSimple(
+        { id: "synthetic", api: "openai-completions", headers },
+        { messages: [{ role: "user", content: [{
+          type: "text",
+          text: `<pi_subagents_notice type="subagent-notify" origin="automated message from the pi-subagents extension, not typed by the user">\n${effectiveNoticeContent}\n</pi_subagents_notice>`,
+        }] }] },
+        { headers },
+      ).result();
+      const options = (globalThis as any).__PI_FOREGROUND_OPTIONS__ ?? (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__;
+      return parseAgentMetadata(new Headers(options?.headers ?? {}).get("x-tokenvisor-agent"));
+    };
+    const expectNoPreviewDependency = async (effectiveNoticeContent: string) => {
+      const metadata = await streamMetadata(effectiveNoticeContent);
+      expect(metadata).not.toBeNull();
+      expect(metadata?.session.id).toBe(`pi:session:${rootId}`);
+      expect(metadata?.depends_on).toBeNull();
+    };
+
+    const capPreview = (output: string) => {
+      const prefix = output.slice(0, fixture.expected.inline_preview_head_code_units);
+      return `${prefix}\n…\nFull output: ${artifactFile} (${fixture.expected.inline_preview_size_text}, ` +
+        `${fixture.expected.inline_preview_line_text}). Read it if needed.`;
+    };
+
+    h.appendFor(rootId);
+    h.hooks.get("session_start")!({ reason: "startup" }, h.sessionContext(rootId));
+    writeChild(rawOutput);
+    writeStatus();
+    writeFileSync(artifactFile, normalizedOutput);
+    let notice = writeNotice(capPreview(normalizedOutput));
+    expect(await streamMetadata(notice.content)).toMatchObject({ depends_on: [fixture.expected.dependency] });
+
+    // The pinned status type makes both the top-level session alias and scratch directory optional.
+    writeStatus(artifactsDir, { sessionFile: null, sessionDir: undefined });
+    expect(await streamMetadata(notice.content)).toMatchObject({ depends_on: [fixture.expected.dependency] });
+    writeStatus(artifactsDir, { sessionFile: undefined, sessionDir: undefined });
+    expect(await streamMetadata(notice.content)).toMatchObject({ depends_on: [fixture.expected.dependency] });
+    writeStatus(artifactsDir, { sessionFile: parentFile });
+    await expectNoPreviewDependency(notice.content);
+    writeStatus(artifactsDir, { sessionFile: 42 });
+    await expectNoPreviewDependency(notice.content);
+    writeStatus(artifactsDir, { steps: [{ sessionFile: childFile, agent, exitCode: 0 }, { sessionFile: childFile, agent, exitCode: 0 }] });
+    await expectNoPreviewDependency(notice.content);
+    writeStatus(artifactsDir, { steps: [{ agent, exitCode: 0 }] });
+    await expectNoPreviewDependency(notice.content);
+    writeStatus();
+
+    const compatibleRunnerHarness = await createHarness("0.84.0");
+    process.env.PI_SUBAGENTS_TEMP_ROOT = h.root;
+    const compatibleRunnerContext = h.sessionContext(rootId);
+    compatibleRunnerHarness.hooks.get("session_start")!({ reason: "startup" }, compatibleRunnerContext);
+    const compatibleRunnerHeaders = new Headers();
+    compatibleRunnerHarness.hooks.get("before_provider_headers")!({ headers: compatibleRunnerHeaders }, compatibleRunnerContext);
+    const compatibleRunnerMetadata = parseAgentMetadata(compatibleRunnerHeaders.get("x-tokenvisor-agent"));
+    expect(compatibleRunnerMetadata).not.toBeNull();
+    expect(compatibleRunnerMetadata?.session.id).toBe(`pi:session:${rootId}`);
+    expect(compatibleRunnerMetadata?.depends_on).toEqual([fixture.expected.dependency]);
+    expect(compatibleRunnerMetadata?.source.runner_version).toBe("0.84.0");
+    compatibleRunnerHarness.hooks.get("session_shutdown")!({}, compatibleRunnerContext);
+    process.env.PI_CODING_AGENT_DIR = h.root;
+    process.argv = [process.execPath, join(h.root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js")];
+
+    // With no acceptance fence the run artifact retains terminal whitespace exactly.
+    for (const ending of ["\n", "\r\n"]) {
+      const trailingOutput = `${normalizedOutput}${ending}`;
+      writeChild(trailingOutput);
+      writeStatus();
+      writeFileSync(artifactFile, trailingOutput);
+      notice = writeNotice(
+        `${trailingOutput.slice(0, 2_000)}\n…\nFull output: ${artifactFile} (2.2 KB, 2 lines). Read it if needed.`,
+      );
+      expect(await streamMetadata(notice.content)).toMatchObject({ depends_on: [fixture.expected.dependency] });
+      if (ending === "\r\n") {
+        writeFileSync(artifactFile, `${normalizedOutput}\n`);
+        await expectNoPreviewDependency(notice.content);
+      }
+    }
+
+    // The exact 2,000-code-unit output uses the existing untruncated path.
+    const exactBoundary = "z".repeat(2_000);
+    writeChild(exactBoundary);
+    writeFileSync(artifactFile, exactBoundary);
+    notice = writeNotice(exactBoundary);
+    expect(await streamMetadata(notice.content)).toMatchObject({ depends_on: [fixture.expected.dependency] });
+
+    // The inline cap applies to the raw output length, including terminal newlines.
+    for (const ending of ["\n", "\r\n"]) {
+      const cappedBoundary = `${"z".repeat(2_000)}${ending}`;
+      writeChild(cappedBoundary);
+      writeFileSync(artifactFile, cappedBoundary);
+      notice = writeNotice(
+        `${"z".repeat(2_000)}\n…\nFull output: ${artifactFile} (2.0 KB, 1 line). Read it if needed.`,
+      );
+      expect(await streamMetadata(notice.content)).toMatchObject({ depends_on: [fixture.expected.dependency] });
+    }
+
+    // At 2,001 UTF-16 code units the renderer adds its native pointer footer.
+    const overBoundary = "z".repeat(2_001);
+    writeChild(overBoundary);
+    writeFileSync(artifactFile, overBoundary);
+    notice = writeNotice(`${overBoundary.slice(0, 2_000)}\n…\nFull output: ${artifactFile} (2.0 KB, 1 line). Read it if needed.`);
+    expect(await streamMetadata(notice.content)).toMatchObject({ depends_on: [fixture.expected.dependency] });
+
+    const overProofLimit = `${"y".repeat(32 * 1024)}\n`;
+    writeChild(overProofLimit);
+    writeFileSync(artifactFile, overProofLimit);
+    notice = writeNotice(`${"y".repeat(2_000)}\n…\nFull output: ${artifactFile} (32.0 KB, 1 line). Read it if needed.`);
+    await expectNoPreviewDependency(notice.content);
+
+    writeChild(rawOutput);
+    writeFileSync(artifactFile, normalizedOutput);
+    notice = writeNotice(capPreview(normalizedOutput));
+    const withoutPointer = writeNoticeEntry({ ...notice, content: notice.content.replace(artifactFile, join(artifactsDir, "other-run_worker_output.md")) });
+    await expectNoPreviewDependency(withoutPointer.content);
+    const wrongMarker = writeNoticeEntry({ ...notice, content: notice.content.replace("\n…\nFull output:", "\n...[preview truncated]\nFull output:") });
+    await expectNoPreviewDependency(wrongMarker.content);
+    const wrongRun = writeNotice(capPreview(normalizedOutput), "run-preview-wrong");
+    await expectNoPreviewDependency(wrongRun.content);
+
+    const neighborArtifactsDir = join(sessionsRoot, "other-run", "subagent-artifacts");
+    mkdirSync(neighborArtifactsDir, { recursive: true });
+    writeStatus(neighborArtifactsDir);
+    notice = writeNotice(capPreview(normalizedOutput));
+    await expectNoPreviewDependency(notice.content);
+    writeStatus();
+
+    writeFileSync(artifactFile, "different full artifact");
+    await expectNoPreviewDependency(notice.content);
+    writeFileSync(artifactFile, normalizedOutput);
+
+    const changedTerminal = `${normalizedOutput.slice(0, 2_000)}different suffix`;
+    writeChild(changedTerminal, "terminal-preview-later");
+    notice = writeNotice(capPreview(normalizedOutput));
+    await expectNoPreviewDependency(notice.content);
+
+    writeChild(normalizedOutput, "terminal-preview-later", fixture.terminal_response_id);
+    notice = writeNotice(capPreview(normalizedOutput));
+    await expectNoPreviewDependency(notice.content);
+
+    writeChild(rawOutput);
+    writeFileSync(artifactFile, normalizedOutput);
+    notice = writeNotice(capPreview(normalizedOutput));
+    const modifiedEffectiveInput = await streamMetadata(notice.content.replace("H".repeat(50), "X".repeat(50)));
+    expect(modifiedEffectiveInput).not.toBeNull();
+    expect(modifiedEffectiveInput?.session.id).toBe(`pi:session:${rootId}`);
+    expect(modifiedEffectiveInput?.depends_on).toBeNull();
+
+    if (process.env.TOKENVISOR_PI_FOREGROUND_BENCHMARK === "1") {
+      const sampleCount = 24;
+      const warmupCount = 8;
+      const samples = {
+        baseline_preview_disabled: { header: [] as number[], stream: [] as number[] },
+        pinned_preview_enabled: { header: [] as number[], stream: [] as number[] },
+      };
+      const fingerprints: string[] = [];
+      const delegates = { baseline_preview_disabled: 0, pinned_preview_enabled: 0 };
+      const dependencyCounts = { baseline_preview_disabled: 0, pinned_preview_enabled: 0 };
+      const quantile = (values: number[], fraction: number) => {
+        const sorted = [...values].sort((left, right) => left - right);
+        return Number(sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)]!.toFixed(3));
+      };
+      const arms = [
+        ["baseline_preview_disabled", wrongRunnerHarness],
+        ["pinned_preview_enabled", h],
+      ] as const;
+      const effectiveContext = { messages: [{ role: "user", content: [{
+        type: "text",
+        text: `<pi_subagents_notice type="subagent-notify" origin="automated message from the pi-subagents extension, not typed by the user">\n${notice.content}\n</pi_subagents_notice>`,
+      }] }] };
+      for (let sample = 0; sample < warmupCount + sampleCount; sample += 1) {
+        for (const [arm, harness] of arms) {
+          const marker = `PI_PREVIEW_TRACE ${sample} ${arm}`;
+          const ctx = h.sessionContext(rootId);
+          const sampleBranch = [parentCall, parentResult, notice];
+          writeSession(parentFile, parentHeader, sampleBranch);
+          h.branches.set(rootId, sampleBranch);
+          harness.branches.set(rootId, sampleBranch);
+          harness.hooks.get("session_shutdown")!({}, ctx);
+          harness.hooks.get("session_start")!({ reason: "startup" }, ctx);
+          expect(ctx.sessionManager.getBranch()).toBe(sampleBranch);
+          const headers = new Headers();
+          process.stderr.write(`${marker} header begin\n`);
+          const headerStart = performance.now();
+          harness.hooks.get("before_provider_headers")!({ headers }, ctx);
+          const headerEnd = performance.now();
+          process.stderr.write(`${marker} header end\n`);
+          (globalThis as any).__PI_FOREGROUND_RESULT__ = {
+            responseId: `bench-preview-${sample}-${arm}`,
+            stopReason: "stop",
+            content: [],
+          };
+          (globalThis as any).__PI_CAPTURED_CALLS__ = 0;
+          const model = { id: "synthetic", api: "openai-completions", headers };
+          process.stderr.write(`${marker} stream begin\n`);
+          const streamStart = performance.now();
+          await harness.providerConfig.streamSimple(model, effectiveContext, { headers }).result();
+          const streamEnd = performance.now();
+          process.stderr.write(`${marker} stream end\n`);
+          await Promise.resolve();
+          const captured = (globalThis as any).__PI_CAPTURED_REQUEST__;
+          const metadata = parseAgentMetadata(new Headers(
+            (globalThis as any).__PI_FOREGROUND_OPTIONS__?.headers ??
+            (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__?.headers ?? [],
+          ).get("x-tokenvisor-agent"));
+          const modelInput = { ...captured?.model };
+          delete modelInput.headers;
+          fingerprints.push(createHash("sha256").update(JSON.stringify({ model: modelInput, context: captured?.context })).digest("hex"));
+          if (sample >= warmupCount) {
+            samples[arm].header.push(headerEnd - headerStart);
+            samples[arm].stream.push(streamEnd - streamStart);
+            delegates[arm] += (globalThis as any).__PI_CAPTURED_CALLS__;
+            dependencyCounts[arm] += metadata?.depends_on?.length ?? 0;
+          }
+          const carrierResponseId = `bench-preview-${sample}-${arm}`;
+          sampleBranch.push({ type: "message", id: `${carrierResponseId}-entry`, message: {
+            role: "assistant", responseId: carrierResponseId, stopReason: "stop", content: [],
+          } });
+          harness.appendFor(rootId);
+          const carrierEvent = { messages: [{
+            role: "assistant", responseId: carrierResponseId, stopReason: "stop",
+          }] };
+          harness.hooks.get("agent_end")!(carrierEvent, ctx);
+          const consumedCount = sampleBranch.filter((entry: any) => entry.customType === PI_RESULT_CONSUMPTION_ENTRY &&
+            entry.data?.response_id === carrierResponseId).length;
+          expect(consumedCount).toBe(metadata?.depends_on?.length ? 1 : 0);
+          harness.hooks.get("agent_end")!(carrierEvent, ctx);
+          expect(sampleBranch.filter((entry: any) => entry.customType === PI_RESULT_CONSUMPTION_ENTRY &&
+            entry.data?.response_id === carrierResponseId).length).toBe(consumedCount);
+          harness.hooks.get("session_shutdown")!({}, ctx);
+        }
+      }
+      const fingerprintSet = new Set(fingerprints);
+      expect(fingerprintSet.size).toBe(1);
+      expect(delegates).toEqual({ baseline_preview_disabled: sampleCount, pinned_preview_enabled: sampleCount });
+      expect(dependencyCounts).toEqual({ baseline_preview_disabled: 0, pinned_preview_enabled: sampleCount });
+      const timings = Object.fromEntries(Object.entries(samples).map(([arm, phases]) => [arm, Object.fromEntries(
+        Object.entries(phases).map(([phase, values]) => [phase, { p50_ms: quantile(values, 0.5), p95_ms: quantile(values, 0.95) }]),
+      )]));
+      console.log(`PI_PINNED_PREVIEW_BENCHMARK ${JSON.stringify({
+        classification: "registered Pi callback cost with the pinned background-preview fallback enabled vs disabled; same files and effective request input",
+        samples_per_arm: sampleCount,
+        warmup_per_arm: warmupCount,
+        timings_ms_p50_p95: timings,
+        delegate_calls: delegates,
+        expected_result_dependencies: dependencyCounts,
+        effective_input_fingerprint_equal: fingerprintSet.size === 1,
+        trace_root: h.root,
+        trace_markers: "PI_PREVIEW_TRACE <sample> <arm> <header|stream> <begin|end>",
+        limitations: ["fake Pi AI delegate; no serialized HTTP body, cache, network, or production model latency measured"],
+      })}`);
+    }
+    h.hooks.get("session_shutdown")!({}, h.sessionContext(rootId));
+  });
+
+  test("preserves verified child identity before delegation is available", async () => {
+    const h = await createHarness();
+    const rootId = "root-session";
+    const childId = "fresh-child";
+    const parentFile = join(h.root, "parent.jsonl");
+    const childFile = join(h.root, "child.jsonl");
+    const parentHeader = { type: "session", id: rootId };
+    const parentCall = { type: "message", id: "parent-call-entry", message: {
+      role: "assistant", responseId: "parent-response", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "subagent", arguments: {} }],
+    } };
+    const parentResult = { type: "message", id: "parent-result-entry", message: {
+      role: "toolResult", toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "child answer" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    } };
+    writeSession(parentFile, parentHeader, [parentCall, parentResult]);
+    const childHeader = { type: "session", id: childId, parentSession: parentFile };
+    const childUser = { type: "message", id: "child-user", message: { role: "user", content: [{ type: "text", text: "task" }] } };
+    const childTerminal = { type: "message", id: "child-terminal", message: {
+      role: "assistant", responseId: "child-response", stopReason: "stop", content: [{ type: "text", text: "child answer" }],
+    } };
+    writeSession(childFile, childHeader, [childUser, childTerminal]);
+    h.files.set(rootId, parentFile);
+    h.headers.set(rootId, parentHeader);
+    h.branches.set(rootId, [parentCall, parentResult]);
+    h.appendFor(rootId);
+    h.hooks.get("session_start")!({ reason: "startup" }, h.sessionContext(rootId));
+
+    const childContext = h.sessionContext(childId);
+    h.files.set(childId, childFile);
+    h.headers.set(childId, childHeader);
+    h.branches.set(childId, [parentCall, childUser, childTerminal]);
+    const childHeaders = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers: childHeaders }, childContext);
+    const childMetadata = parseAgentMetadata(childHeaders.get("x-tokenvisor-agent"));
+    expect(childMetadata?.session).toEqual({ id: `pi:session:${childId}`, root_id: `pi:session:${rootId}`, parent_id: `pi:session:${rootId}` });
+    expect(childMetadata?.delegation).toBeNull();
+    h.hooks.get("tool_result")!({
+      toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "child answer" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    }, h.sessionContext(rootId));
+    const parentHeaders = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers: parentHeaders }, h.sessionContext(rootId));
+    const parentMetadata = parseAgentMetadata(parentHeaders.get("x-tokenvisor-agent"));
+    expect(parentMetadata?.child_launches[0]?.child_session_id).toBe(childMetadata?.session.id);
+  });
+
+  test("creates a result dependency only for the exact ordinary child output", async () => {
+    const h = await createHarness();
+    const rootId = "root-session";
+    const childId = "fresh-child";
+    const parentFile = join(h.root, "parent.jsonl");
+    const childFile = join(h.root, "child.jsonl");
+    const parentHeader = { type: "session", id: rootId };
+    const parentCall = { type: "message", id: "parent-call-entry", message: {
+      role: "assistant", responseId: "parent-response", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "subagent", arguments: {} }],
+    } };
+    const toolResult = { type: "message", id: "result-entry", message: {
+      role: "toolResult", toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "child answer" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    } };
+    writeSession(parentFile, parentHeader, [parentCall, toolResult]);
+    writeSession(childFile, { type: "session", id: childId, parentSession: parentFile }, [{
+      type: "message", id: "child-answer-entry", message: {
+        role: "assistant", responseId: "child-response", stopReason: "stop", content: [{ type: "text", text: "child answer" }],
+      },
+    }]);
+    h.files.set(rootId, parentFile);
+    h.headers.set(rootId, parentHeader);
+    h.branches.set(rootId, [parentCall, toolResult]);
+    h.appendFor(rootId);
+    const ctx = h.sessionContext(rootId);
+    h.hooks.get("session_start")!({ reason: "startup" }, ctx);
+    h.hooks.get("tool_result")!({
+      toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "child answer" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    }, ctx);
+
+    const headers = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers }, ctx);
+    const metadata = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
+    expect(metadata?.child_launches).toHaveLength(1);
+    expect(metadata?.depends_on).toEqual([{
+      session_id: `pi:session:${childId}`, response_id: "child-response", run_id: "run-1",
+    }]);
+
+    const runWithEffectiveMessages = async (responseId: string, messages: any[]) => {
+      const requestHeaders = new Headers();
+      h.hooks.get("before_provider_headers")!({ headers: requestHeaders }, ctx);
+      (globalThis as any).__PI_FOREGROUND_RESULT__ = { responseId, stopReason: "stop", content: [] };
+      (globalThis as any).__PI_TEST_STREAM_RESULT__ = (globalThis as any).__PI_FOREGROUND_RESULT__;
+      await h.providerConfig.streamSimple(
+        { id: "synthetic", api: "openai-completions", headers: requestHeaders },
+        { messages },
+        { headers: requestHeaders },
+      ).result();
+      const options = (globalThis as any).__PI_FOREGROUND_OPTIONS__ ?? (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__;
+      return parseAgentMetadata(new Headers(options?.headers ?? {}).get("x-tokenvisor-agent"));
+    };
+    const absentResult = await runWithEffectiveMessages("carrier-absent", [{
+      role: "user", content: [{ type: "text", text: "child answer" }],
+    }]);
+    expect(absentResult?.child_launches).toHaveLength(1);
+    expect(absentResult?.depends_on).toEqual([]);
+    const changedResult = await runWithEffectiveMessages("carrier-changed", [
+      { role: "toolResult", toolCallId: "call-1", content: [{ type: "text", text: "changed output" }] },
+      { role: "user", content: [{ type: "text", text: "child answer" }] },
+    ]);
+    expect(changedResult?.child_launches).toHaveLength(1);
+    expect(changedResult?.depends_on).toEqual([]);
+  });
+
+  test("accepts Pi's structured fan-out and mission wrappers around the exact inline child output", async () => {
+    const h = await createHarness();
+    const rootId = "root-session";
+    const childId = "fresh-child";
+    const parentFile = join(h.root, "parent.jsonl");
+    const childFile = join(h.root, "child.jsonl");
+    const parentHeader = { type: "session", id: rootId };
+    const parentCall = { type: "message", id: "parent-call-entry", message: {
+      role: "assistant", responseId: "parent-response", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "subagent", arguments: {} }],
+    } };
+    const finalOutput = "NATIVE_CHILD_ACK";
+    const missionId = "9aebeb6f-a41e-435d-b9eb-67097b0fd578";
+    const deliveredText = `Run fan-out: 1/64 used, 63 remaining\n${finalOutput}\nMission: ${missionId} (completed)`;
+    const details = {
+      mode: "single",
+      runId: "run-1",
+      runFanoutBudget: { used: 1, limit: 64, remaining: 63 },
+      mission: { id: missionId, status: "completed" },
+      results: [{
+        context: "fresh", sessionFile: childFile, exitCode: 0,
+        outputMode: "inline", outputState: "present", finalOutput,
+      }],
+    };
+    const toolResult = { type: "message", id: "result-entry", message: {
+      role: "toolResult", toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: deliveredText }], details,
+    } };
+    writeSession(parentFile, parentHeader, [parentCall, toolResult]);
+    writeSession(childFile, { type: "session", id: childId, parentSession: parentFile }, [{
+      type: "message", id: "child-answer-entry", message: {
+        role: "assistant", responseId: "child-response", stopReason: "stop", content: [{ type: "text", text: finalOutput }],
+      },
+    }]);
+    h.files.set(rootId, parentFile);
+    h.headers.set(rootId, parentHeader);
+    h.branches.set(rootId, [parentCall, toolResult]);
+    h.appendFor(rootId);
+    const ctx = h.sessionContext(rootId);
+    h.hooks.get("session_start")!({ reason: "startup" }, ctx);
+    expect(readPiForegroundLaunchEvidence({
+      toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: `untrusted prefix\n${finalOutput}` }], details,
+    }, ctx)?.deliveredOutputSha256).toBeUndefined();
+    h.hooks.get("tool_result")!({
+      toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: deliveredText }], details,
+    }, ctx);
+    expect(h.appended.find((entry) => entry.customType === "tokenvisor-agent-foreground-delivery-v1")?.data.receipt.last_response_id)
+      .toBe("child-response");
+    const preparedHeaders = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers: preparedHeaders }, ctx);
+    expect(parseAgentMetadata(preparedHeaders.get("x-tokenvisor-agent"))?.depends_on).toEqual([{
+      session_id: `pi:session:${childId}`, response_id: "child-response", run_id: "run-1",
+    }]);
+
+    const headers = preparedHeaders;
+    (globalThis as any).__PI_FOREGROUND_RESULT__ = { responseId: "carrier", stopReason: "stop", content: [] };
+    (globalThis as any).__PI_TEST_STREAM_RESULT__ = (globalThis as any).__PI_FOREGROUND_RESULT__;
+    await h.providerConfig.streamSimple(
+      { id: "synthetic", api: "openai-completions", headers },
+      { messages: [parentCall.message, toolResult.message] },
+      { headers },
+    ).result();
+    const options = (globalThis as any).__PI_FOREGROUND_OPTIONS__ ?? (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__;
+    const metadata = parseAgentMetadata(new Headers(options?.headers ?? {}).get("x-tokenvisor-agent"));
+    expect(metadata?.depends_on).toEqual([{
+      session_id: `pi:session:${childId}`, response_id: "child-response", run_id: "run-1",
+    }]);
+
+    // A later native tool_result hook can replace the stored ordinary output after this
+    // provider's hook persisted its witness. Preserve identity, but treat the mismatch as filtered.
+    toolResult.message.content = [{ type: "text", text: "NATIVE_OUTPUT_WITHHELD" }];
+    const filteredHeaders = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers: filteredHeaders }, ctx);
+    const filteredMetadata = parseAgentMetadata(filteredHeaders.get("x-tokenvisor-agent"));
+    expect(filteredMetadata?.child_launches).toHaveLength(1);
+    expect(filteredMetadata?.depends_on).toEqual([]);
+    expect(readPiPendingChildLaunchReceipts(ctx)).toHaveLength(1);
+  });
+
+  test("keeps the launch receipt when persisting its output witness fails", async () => {
+    const h = await createHarness();
+    const rootId = "root-session";
+    const childId = "fresh-child";
+    const parentFile = join(h.root, "parent.jsonl");
+    const childFile = join(h.root, "child.jsonl");
+    const parentHeader = { type: "session", id: rootId };
+    const parentCall = { type: "message", id: "parent-call-entry", message: {
+      role: "assistant", responseId: "parent-response", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "subagent", arguments: {} }],
+    } };
+    const toolResult = { type: "message", id: "result-entry", message: {
+      role: "toolResult", toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "child answer" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    } };
+    writeSession(parentFile, parentHeader, [parentCall, toolResult]);
+    writeSession(childFile, { type: "session", id: childId, parentSession: parentFile }, [{
+      type: "message", message: { role: "assistant", responseId: "child-response", stopReason: "stop", content: [{ type: "text", text: "child answer" }] },
+    }]);
+    h.files.set(rootId, parentFile);
+    h.headers.set(rootId, parentHeader);
+    h.branches.set(rootId, [parentCall, toolResult]);
+    h.appendFor(rootId);
+    const ctx = h.sessionContext(rootId);
+    h.hooks.get("session_start")!({ reason: "startup" }, ctx);
+    h.failAppendTypes.add("tokenvisor-agent-foreground-delivery-v1");
+    h.hooks.get("tool_result")!({
+      toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "child answer" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    }, ctx);
+    const headers = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers }, ctx);
+    const metadata = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
+    expect(metadata?.child_launches).toHaveLength(1);
+    expect(metadata?.child_launches[0]?.child_session_id).toBe(`pi:session:${childId}`);
+    expect(metadata?.depends_on).toEqual([]);
+    expect(h.appended.some((entry) => entry.customType === "tokenvisor-agent-launch-receipts-v1")).toBe(true);
+    expect(h.appended.some((entry) => entry.customType === "tokenvisor-agent-foreground-delivery-v1")).toBe(false);
+  });
+
+  test("distinguishes same-role child calls by tool-call ID and response lineage", () => {
+    const root = mkdtempSync(join(tmpdir(), "tokenvisor-pi-reused-child-role-"));
+    tempRoots.push(root);
+    const parentFile = join(root, "parent.jsonl");
+    const firstChildFile = join(root, "first-child.jsonl");
+    const secondChildFile = join(root, "second-child.jsonl");
+    const firstCall = { type: "message", id: "parent-call-one", message: {
+      role: "assistant", responseId: "parent-response-one", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "same-role-call-one", name: "subagent", arguments: { agent: "worker" } }],
+    } };
+    const secondCall = { type: "message", id: "parent-call-two", message: {
+      role: "assistant", responseId: "parent-response-two", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "same-role-call-two", name: "subagent", arguments: { agent: "worker" } }],
+    } };
+    writeSession(parentFile, { type: "session", id: "root-session" }, [firstCall, secondCall]);
+    writeSession(firstChildFile, { type: "session", id: "child-one", parentSession: parentFile }, [{
+      type: "message", message: { role: "assistant", responseId: "response-one", stopReason: "stop", content: [{ type: "text", text: "first" }] },
+    }]);
+    writeSession(secondChildFile, { type: "session", id: "child-two", parentSession: parentFile }, [{
+      type: "message", id: "child-two-intermediate", message: {
+        role: "assistant", responseId: "response-two-intermediate", stopReason: "stop", content: [{ type: "text", text: "work in progress" }],
+      },
+    }, {
+      type: "message", message: { role: "assistant", responseId: "response-two", stopReason: "stop", content: [{ type: "text", text: "second" }] },
+    }]);
+    const ctx = { sessionManager: {
+      getSessionId: () => "root-session",
+      getSessionFile: () => parentFile,
+      getHeader: () => ({ id: "root-session" }),
+      getBranch: () => [firstCall, secondCall],
+    } } as any;
+    const evidence = readPiForegroundLaunchEvidence({
+      toolName: "subagent", toolCallId: "same-role-call-two", isError: false,
+      content: [{ type: "text", text: "second" }],
+      details: { mode: "single", runId: "run-two", results: [{ context: "fresh", sessionFile: secondChildFile, exitCode: 0 }] },
+    }, ctx);
+    expect(evidence?.receipt).toEqual({
+      parent_response_id: "parent-response-two", tool_call_id: "same-role-call-two", child_session_id: "pi:session:child-two",
+      run_id: "run-two", last_response_id: "response-two",
+    });
+    expect(evidence?.deliveredOutputSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("keeps a filtered launch receipt pending, then retires it only after a committed carrier response", async () => {
+    const h = await createHarness();
+    const rootId = "root-session";
+    const childId = "fresh-child";
+    const parentFile = join(h.root, "parent.jsonl");
+    const childFile = join(h.root, "child.jsonl");
+    const parentHeader = { type: "session", id: rootId };
+    const parentCall = { type: "message", id: "parent-call-entry", message: {
+      role: "assistant", responseId: "parent-response", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "subagent", arguments: {} }],
+    } };
+    const toolResult = { type: "message", id: "result-entry", message: {
+      role: "toolResult", toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "filtered output" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    } };
+    writeSession(parentFile, parentHeader, [parentCall, toolResult]);
+    writeSession(childFile, { type: "session", id: childId, parentSession: parentFile }, [{
+      type: "message", id: "child-answer-entry", message: {
+        role: "assistant", responseId: "child-response", stopReason: "stop", content: [{ type: "text", text: "child answer" }],
+      },
+    }]);
+    h.files.set(rootId, parentFile);
+    h.headers.set(rootId, parentHeader);
+    h.branches.set(rootId, [parentCall, toolResult]);
+    h.appendFor(rootId);
+    const ctx = h.sessionContext(rootId);
+    h.hooks.get("session_start")!({ reason: "startup" }, ctx);
+
+    const filteredEvent = {
+      toolName: "subagent", toolCallId: "call-1", isError: false,
+      content: [{ type: "text", text: "filtered output" }],
+      details: { mode: "single", runId: "run-1", results: [{ context: "fresh", sessionFile: childFile, exitCode: 0 }] },
+    };
+    h.hooks.get("tool_result")!(filteredEvent, ctx);
+    h.hooks.get("tool_result")!(filteredEvent, ctx);
+    expect(h.appended.filter((entry) => entry.customType === "tokenvisor-agent-launch-receipts-v1")).toHaveLength(1);
+    expect(h.appended.filter((entry) => entry.customType === "tokenvisor-agent-foreground-delivery-v1")).toHaveLength(0);
+    let headers = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers }, ctx);
+    const filteredMetadata = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
+    expect(filteredMetadata?.child_launches).toEqual([{
+      parent_response_id: "parent-response", tool_call_id: "call-1", child_session_id: `pi:session:${childId}`,
+      run_id: "run-1", last_response_id: "child-response",
+    }]);
+    expect(filteredMetadata?.depends_on).toEqual([]);
+
+    (globalThis as any).__PI_FOREGROUND_RESULT__ = { responseId: "failed-carrier", stopReason: "error", content: [] };
+    (globalThis as any).__PI_TEST_STREAM_RESULT__ = (globalThis as any).__PI_FOREGROUND_RESULT__;
+    await h.providerConfig.streamSimple({ id: "synthetic", api: "openai-completions", headers }, { messages: [parentCall.message, toolResult.message] }, { headers }).result();
+    const failedBranch = h.branches.get(rootId)!;
+    h.appendFor(rootId);
+    h.hooks.get("agent_end")!({ messages: [{ role: "assistant", responseId: "failed-carrier", stopReason: "error" }] }, ctx);
+    expect(readPiPendingChildLaunchReceipts(ctx)).toHaveLength(1);
+
+    headers = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers }, ctx);
+    (globalThis as any).__PI_FOREGROUND_RESULT__ = { responseId: "good-carrier", stopReason: "stop", content: [{ type: "text", text: "ok" }] };
+    (globalThis as any).__PI_TEST_STREAM_RESULT__ = (globalThis as any).__PI_FOREGROUND_RESULT__;
+    await h.providerConfig.streamSimple({ id: "synthetic", api: "openai-completions", headers }, { messages: [parentCall.message, toolResult.message] }, { headers }).result();
+    h.branches.set(rootId, [...failedBranch, { type: "message", id: "good-carrier-entry", message: {
+      role: "assistant", responseId: "good-carrier", stopReason: "stop", content: [{ type: "text", text: "ok" }],
+    } }]);
+    h.appendFor(rootId);
+    h.hooks.get("agent_end")!({ messages: [{ role: "assistant", responseId: "good-carrier", stopReason: "stop" }] }, ctx);
+    expect(h.appended.some((entry) => entry.customType === "tokenvisor-agent-launch-receipt-consumption-v1" && entry.data.response_id === "good-carrier")).toBe(true);
+    expect(readPiPendingChildLaunchReceipts(ctx)).toEqual([]);
+  });
+
+  test("rehydrates pending receipts from the committed compaction snapshot", () => {
+    const h = { sessionManager: {
+      getSessionId: () => "root-session",
+      getSessionFile: () => undefined,
+      getHeader: () => ({ id: "root-session" }),
+      getBranch: () => [],
+    } } as any;
+    const receipt = {
+      parent_response_id: "parent-response", tool_call_id: "call-1", child_session_id: "child-session",
+      run_id: "run-1", last_response_id: "child-response",
+    };
+    const nativeCompaction = { type: "compaction", id: "compaction-1" };
+    const record = {
+      type: "custom_message", customType: "tokenvisor-agent-compaction-v1",
+      data: makePiCompactionRecord("compaction-1", [], false, [], false, [], [receipt]),
+    };
+    h.sessionManager.getBranch = () => [nativeCompaction, record];
+    expect(readPiPendingChildLaunchReceipts(h)).toEqual([receipt]);
+  });
+
+  test("drains more than eight persisted receipts over successive committed streams", async () => {
+    const h = await createHarness();
+    const rootId = "root-session";
+    const parentFile = join(h.root, "parent.jsonl");
+    const parentHeader = { type: "session", id: rootId };
+    const receipts = Array.from({ length: 9 }, (_, index) => ({
+      parent_response_id: `parent-response-${index}`,
+      tool_call_id: `call-${index}`,
+      child_session_id: `child-session-${index}`,
+      run_id: `run-${index}`,
+      last_response_id: `child-response-${index}`,
+    }));
+    writeSession(parentFile, parentHeader, []);
+    const branch: any[] = [{
+      type: "custom_message", id: "seeded-pending-receipts", customType: "tokenvisor-agent-launch-receipts-v1",
+      data: { version: 1, receipts },
+    }];
+    h.files.set(rootId, parentFile);
+    h.headers.set(rootId, parentHeader);
+    h.branches.set(rootId, branch);
+    h.appendFor(rootId);
+    const ctx = h.sessionContext(rootId);
+    h.hooks.get("session_start")!({ reason: "startup" }, ctx);
+
+    const sendCarrier = async (responseId: string) => {
+      const headers = new Headers();
+      h.hooks.get("before_provider_headers")!({ headers }, ctx);
+      const outgoing = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
+      (globalThis as any).__PI_FOREGROUND_RESULT__ = { responseId, stopReason: "stop", content: [{ type: "text", text: "carrier" }] };
+      (globalThis as any).__PI_TEST_STREAM_RESULT__ = (globalThis as any).__PI_FOREGROUND_RESULT__;
+      await h.providerConfig.streamSimple({ id: "synthetic", api: "openai-completions", headers }, { messages: [] }, { headers }).result();
+      branch.push({ type: "message", id: `${responseId}-entry`, message: {
+        role: "assistant", responseId, stopReason: "stop", content: [{ type: "text", text: "carrier" }],
+      } });
+      h.appendFor(rootId);
+      h.hooks.get("agent_end")!({ messages: [{ role: "assistant", responseId, stopReason: "stop" }] }, ctx);
+      return outgoing;
+    };
+
+    const first = await sendCarrier("carrier-one");
+    expect(first?.child_launches).toEqual(receipts.slice(0, 8));
+    expect(readPiPendingChildLaunchReceipts(ctx)).toEqual(receipts.slice(8));
+    const second = await sendCarrier("carrier-two");
+    expect(second?.child_launches).toEqual(receipts.slice(8));
+    expect(readPiPendingChildLaunchReceipts(ctx)).toEqual([]);
+  });
+
+  test("releases native child session contexts after repeated Pi startup and shutdown", async () => {
+    const h = await createHarness();
+    const parentId = "parent-session";
+    const parentFile = join(h.root, "parent.jsonl");
+    const parentHeader = { type: "session", id: parentId };
+    const parentCall = { type: "message", id: "parent-call", message: {
+      role: "assistant", responseId: "parent-response", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "subagent", arguments: {} }],
+    } };
+    writeSession(parentFile, parentHeader, [parentCall]);
+    const startAndStop = (index: number): WeakRef<object> => {
+      const sessionId = `child-session-${index}`;
+      const sessionFile = join(h.root, `${sessionId}.jsonl`);
+      const header = { type: "session", id: sessionId, parentSession: parentFile };
+      const childUser = { type: "message", id: `child-user-${index}`, message: {
+        role: "user", content: [{ type: "text", text: `task ${index}` }],
+      } };
+      writeSession(sessionFile, header, [childUser]);
+      h.files.set(sessionId, sessionFile);
+      h.headers.set(sessionId, header);
+      h.branches.set(sessionId, [parentCall, childUser]);
+      let ctx: any = h.sessionContext(sessionId);
+      const reference = new WeakRef(ctx);
+      h.hooks.get("session_start")!({ reason: "startup" }, ctx);
+      h.hooks.get("session_shutdown")!({}, ctx);
+      ctx = null;
+      return reference;
+    };
+    const weakContexts: WeakRef<object>[] = [];
+    for (let index = 0; index < 48; index += 1) {
+      const reference = await new Promise<WeakRef<object>>((resolve) => {
+        setTimeout(() => {
+          resolve(startAndStop(index));
+        }, 0);
+      });
+      weakContexts.push(reference);
+    }
+    for (let index = 0; index < 3; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      Bun.gc(true);
+      await Promise.resolve();
+    }
+    const retainedContextIndices = weakContexts.flatMap((reference, index) => reference.deref() ? [index] : []);
+    expect(retainedContextIndices, `native child contexts still strongly referenced: ${retainedContextIndices.join(",")}`)
+      .toEqual([]);
+  });
+
+  test("uses committed native OMP compaction proof for known-empty provider dependencies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tokenvisor-omp-compaction-hook-test-"));
+    tempRoots.push(root);
+    const oldExecPath = process.execPath;
+    try {
+      const versionExecutable = join(root, "omp-version");
+      writeFileSync(versionExecutable, "#!/bin/sh\nprintf 'omp/18.12.6\\n'\n");
+      chmodSync(versionExecutable, 0o755);
+      process.execPath = versionExecutable;
+      const hostExecutable = join(root, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js");
+      mkdirSync(dirname(hostExecutable), { recursive: true });
+      writeFileSync(hostExecutable, "");
+      process.argv = [versionExecutable, hostExecutable];
+      process.env.TOKENVISOR_API_KEY = "synthetic-key";
+      process.env.TOKENVISOR_BASE_URL = "http://127.0.0.1:1/api/v1";
+      globalThis.fetch = async () => Response.json({ data: [{ id: "synthetic", type: "chat", capabilities: [] }] });
+
+      const sessionId = "omp-compaction-root";
+      const sessionFile = join(root, "root.jsonl");
+      const header = { type: "session", id: sessionId };
+      writeSession(sessionFile, header, []);
+      const beforeResponse = { type: "message", id: "before-entry", message: {
+        role: "assistant", responseId: "before-response", stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "pending-task-call", name: "task", arguments: {} }],
+      } };
+      const oldNativeCompaction = {
+        type: "compaction", id: "old-compact", firstKeptEntryId: "before-entry", method: "snapcompact", fromExtension: false,
+      };
+      const branch: any[] = [beforeResponse, oldNativeCompaction, {
+        type: "custom", customType: PI_COMPACTION_ENTRY,
+        data: makePiCompactionRecord("old-compact", [], true, [], true),
+      }];
+      const branches = new Map([[sessionId, branch]]);
+      let currentSession = sessionId;
+      let appendId = 0;
+      let providerConfig: any;
+      const hooks = new Map<string, (event: any, ctx: any) => unknown>();
+      const eventHandlers = new Map<string, (event: any) => unknown>();
+      const ctx = { sessionManager: {
+        getSessionId: () => sessionId,
+        getSessionFile: () => sessionFile,
+        getHeader: () => header,
+        getBranch: () => branches.get(sessionId) ?? [],
+      } };
+      await tokenVisorProvider({
+        on: (name: string, handler: any) => hooks.set(name, handler),
+        events: { on: (name: string, handler: any) => { eventHandlers.set(name, handler); return () => {}; }, emit: () => {} },
+        registerCommand: () => {},
+        registerProvider: (_name: string, config: any) => { providerConfig = config; },
+        appendEntry: (customType: string, data: any) => {
+          const current = branches.get(currentSession)!;
+          current.push({ type: "custom", id: `hook-entry-${appendId++}`, customType, data });
+        },
+      } as any);
+      hooks.get("session_start")!({ reason: "startup" }, ctx);
+
+      const commitCompaction = (id: string, eventId = id) => {
+        currentSession = sessionId;
+        hooks.get("session_before_compact")!({}, ctx);
+        const compactionEntry = {
+          type: "compaction", id, firstKeptEntryId: "before-entry", method: "snapcompact", fromExtension: false,
+        };
+        branch.push(compactionEntry);
+        hooks.get("session_compact")!({
+          fromExtension: false,
+          compactionEntry: { ...compactionEntry, id: eventId },
+        }, ctx);
+      };
+      const captureNextMetadata = async (responseId: string) => {
+        (globalThis as any).__OMP_PROVIDER_RESULT__ = { responseId, stopReason: "stop", content: [] };
+        await providerConfig.streamSimple(
+          { id: "synthetic", api: "openai-completions" },
+          { messages: [] },
+          { sessionId },
+        ).result();
+        const options = (globalThis as any).__OMP_PROVIDER_OPTIONS__;
+        return parseAgentMetadata(new Headers(options?.headers ?? {}).get("x-tokenvisor-agent"));
+      };
+
+      commitCompaction("known-empty-compact");
+      const knownEmpty = await captureNextMetadata("after-known-empty");
+      expect(knownEmpty?.depends_on).toEqual([]);
+      expect(knownEmpty?.sequence.previous_response_id).toBe("before-response");
+      branch.push({ type: "message", id: "after-known-empty-entry", message: {
+        role: "assistant", responseId: "after-known-empty", stopReason: "stop", content: [],
+      } });
+
+      const childSessionFile = join(root, "child.jsonl");
+      writeSession(childSessionFile, { type: "session", id: "omp-pending-child", parentSession: sessionFile }, []);
+      const lifecycle = {
+        id: "pending-agent-id",
+        agent: "worker",
+        parentToolCallId: "pending-task-call",
+        detached: false,
+        sessionFile: childSessionFile,
+        status: "started",
+      };
+      eventHandlers.get("task:subagent:lifecycle")!(lifecycle);
+      expect(getOmpRuntimeCaptureState().earlyTaskBindings.size).toBe(1);
+      const originalPredecessor = structuredClone(beforeResponse);
+      commitCompaction("pending-input-compact");
+      const pendingUnavailable = await captureNextMetadata("after-pending-input");
+      expect(pendingUnavailable?.depends_on).toBeNull();
+      expect(pendingUnavailable?.sequence.previous_response_id).toBe("after-known-empty");
+      expect(branch.find((entry) => entry.id === "before-entry")).toEqual(originalPredecessor);
+      expect(branch.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual([
+        "before-entry", "after-known-empty-entry",
+      ]);
+      clearOmpEarlyTaskBindingsForSession(getOmpRuntimeCaptureState(), sessionId);
+      branch.push({ type: "message", id: "after-pending-input-entry", message: {
+        role: "assistant", responseId: "after-pending-input", stopReason: "stop", content: [],
+      } });
+
+      const resetNativeCompaction = {
+        type: "compaction", id: "reset-compact", firstKeptEntryId: "after-pending-input-entry", method: "snapcompact", fromExtension: false,
+      };
+      const afterKnownEntry = branch.find((entry) => entry.id === "after-known-empty-entry")!;
+      const afterPendingEntry = branch.find((entry) => entry.id === "after-pending-input-entry")!;
+      branch.splice(0, branch.length, beforeResponse, afterKnownEntry, afterPendingEntry, resetNativeCompaction, {
+        type: "custom", customType: PI_COMPACTION_ENTRY,
+        data: makePiCompactionRecord("reset-compact", [], true, [], true),
+      });
+
+      commitCompaction("mismatched-compact", "stale-event-compact");
+      const unavailable = await captureNextMetadata("after-mismatched-commit");
+      expect(unavailable?.depends_on).toBeNull();
+      expect(unavailable?.sequence.previous_response_id).toBe("after-pending-input");
+      expect(branch.find((entry) => entry.id === "before-entry")).toEqual(originalPredecessor);
+      expect(branch.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual([
+        "before-entry", "after-known-empty-entry", "after-pending-input-entry",
+      ]);
+      expect(getOmpRuntimeCaptureState().branchReaders.has(sessionId)).toBe(true);
+
+      if (process.env.TOKENVISOR_OMP_CAPTURE_BENCHMARK === "1") {
+        const sampleCount = 32;
+        const warmupCount = 8;
+        const compactMs: number[] = [];
+        const fingerprints: string[] = [];
+        const delegateCallsBefore = ((globalThis as any).__OMP_PROVIDER_REQUESTS__ ?? []).length;
+        const quantile = (values: number[], fraction: number) => {
+          const sorted = [...values].sort((left, right) => left - right);
+          return Number(sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)]!.toFixed(3));
+        };
+        for (let sample = 0; sample < warmupCount + sampleCount; sample += 1) {
+          const predecessorId = `omp-bench-predecessor-${sample}`;
+          const predecessor = { type: "message", id: `omp-bench-entry-${sample}`, message: {
+            role: "assistant", responseId: predecessorId, stopReason: "stop", content: [],
+          } };
+          branch.splice(0, branch.length, predecessor);
+          currentSession = sessionId;
+          hooks.get("session_before_compact")!({}, ctx);
+          const compactionEntry = {
+            type: "compaction",
+            id: `omp-bench-compact-${sample}`,
+            firstKeptEntryId: predecessor.id,
+            method: "snapcompact",
+            fromExtension: false,
+          };
+          branch.push(compactionEntry);
+          process.stderr.write(`OMP_COMPACTION_TRACE ${sample} handler begin\n`);
+          const compactStart = performance.now();
+          hooks.get("session_compact")!({ fromExtension: false, compactionEntry }, ctx);
+          const compactEnd = performance.now();
+          process.stderr.write(`OMP_COMPACTION_TRACE ${sample} handler end\n`);
+
+          const carrierResponseId = `omp-bench-carrier-${sample}`;
+          const metadata = await captureNextMetadata(carrierResponseId);
+          expect(metadata?.depends_on).toEqual([]);
+          expect(metadata?.sequence.previous_response_id).toBe(predecessorId);
+          const captured = (globalThis as any).__OMP_PROVIDER_REQUESTS__?.at(-1);
+          const modelInput = { ...captured?.model };
+          delete modelInput.headers;
+          fingerprints.push(createHash("sha256").update(JSON.stringify({
+            model: modelInput,
+            context: captured?.context,
+          })).digest("hex"));
+          if (sample >= warmupCount) compactMs.push(compactEnd - compactStart);
+          branch.push({ type: "message", id: `omp-bench-carrier-entry-${sample}`, message: {
+            role: "assistant", responseId: carrierResponseId, stopReason: "stop", content: [],
+          } });
+        }
+        expect(fingerprints).toHaveLength(warmupCount + sampleCount);
+        expect(new Set(fingerprints).size).toBe(1);
+        const streamDelegateCalls = ((globalThis as any).__OMP_PROVIDER_REQUESTS__ ?? []).length - delegateCallsBefore;
+        expect(streamDelegateCalls).toBe(warmupCount + sampleCount);
+        console.log(`OMP_COMPACTION_BENCHMARK ${JSON.stringify({
+          classification: "absolute registered OMP session_compact callback time; no incremental baseline seam",
+          samples: sampleCount,
+          warmup: warmupCount,
+          handler_ms: { p50: quantile(compactMs, 0.5), p95: quantile(compactMs, 0.95) },
+          identical_next_stream_input_fingerprint: new Set(fingerprints).size === 1,
+          next_stream_delegate_calls: streamDelegateCalls,
+          next_stream_known_empty_dependencies: true,
+          trace_root: root,
+          trace_markers: "OMP_COMPACTION_TRACE <sample> handler <begin|end>",
+          limitations: ["in-memory branch fixture; callback timing is absolute", "no real serialized request, cache, or inference timing"],
+        })}`);
+        const captureState = getOmpRuntimeCaptureState();
+        expect(captureState.pendingTaskResultConsumptions.has(sessionId)).toBe(false);
+        expect(captureState.pendingTaskBindingRetirements.has(sessionId)).toBe(false);
+        expect(captureState.earlyTaskBindings.size).toBe(0);
+      }
+
+      hooks.get("session_shutdown")!({}, ctx);
+      expect(getOmpRuntimeCaptureState().branchReaders.has(sessionId)).toBe(false);
+    } finally {
+      process.execPath = oldExecPath;
+    }
+  });
+
+  test("keeps verified OMP child identity when no task binding is available", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tokenvisor-omp-unbound-child-test-"));
+    tempRoots.push(root);
+    const oldExecPath = process.execPath;
+    try {
+      const versionExecutable = join(root, "omp-version");
+      writeFileSync(versionExecutable, "#!/bin/sh\nprintf 'omp/18.12.6\\n'\n");
+      chmodSync(versionExecutable, 0o755);
+      process.execPath = versionExecutable;
+      const hostExecutable = join(root, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js");
+      process.argv = [versionExecutable, hostExecutable];
+      process.env.TOKENVISOR_API_KEY = "synthetic-key";
+      process.env.TOKENVISOR_BASE_URL = "http://127.0.0.1:1/api/v1";
+      globalThis.fetch = async () => Response.json({ data: [{ id: "synthetic", type: "chat", capabilities: [] }] });
+
+      const parentFile = join(root, "parent.jsonl");
+      const childFile = join(root, "child.jsonl");
+      const rootId = "omp-root-session";
+      const childId = "omp-child-session";
+      const parentHeader = { type: "session", id: rootId };
+      const childHeader = { type: "session", id: childId, parentSession: parentFile };
+      writeSession(parentFile, parentHeader, []);
+      writeSession(childFile, childHeader, [{ type: "message", message: { role: "user", content: "fresh task" } }]);
+
+      const hooks = new Map<string, (event: any, ctx: any) => unknown>();
+      let providerConfig: any;
+      const branch = [{ type: "message", id: "child-user", message: { role: "user", content: "fresh task" } }];
+      const pi = {
+        on: (name: string, handler: any) => hooks.set(name, handler),
+        events: { on: () => () => {}, emit: () => {} },
+        registerCommand: () => {},
+        registerProvider: (_name: string, config: any) => { providerConfig = config; },
+        appendEntry: () => { throw new Error("no custom entries expected"); },
+      };
+      await tokenVisorProvider(pi as any);
+      const ctx = {
+        agent: { id: "worker-unbound", kind: "subagent" },
+        sessionManager: {
+          getSessionId: () => childId,
+          getSessionFile: () => childFile,
+          getHeader: () => childHeader,
+          getBranch: () => branch,
+        },
+      };
+      hooks.get("session_start")!({ reason: "startup" }, ctx);
+
+      await providerConfig.streamSimple(
+        { id: "synthetic", api: "openai-completions" },
+        { messages: branch.map((entry) => entry.message) },
+        { sessionId: childId },
+      ).result();
+      const options = (globalThis as any).__OMP_PROVIDER_OPTIONS__;
+      const metadata = parseAgentMetadata(new Headers(options?.headers ?? {}).get("x-tokenvisor-agent"));
+      expect(metadata?.session).toEqual({
+        id: `omp:session:${childId}`, root_id: `omp:session:${rootId}`, parent_id: `omp:session:${rootId}`,
+      });
+      expect(metadata?.delegation).toBeNull();
+      expect(metadata?.sequence).toEqual({ status: "start", previous_response_id: null });
+    } finally {
+      process.execPath = oldExecPath;
+    }
+  });
+
+  test("retires filtered task bindings through shared state across provider registrations", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tokenvisor-omp-shared-retirement-test-"));
+    tempRoots.push(root);
+    const oldExecPath = process.execPath;
+    const oldArgv = process.argv;
+    const parentId = "01a1967e-parent-b925-73fd-b992-d0d11d570d4c";
+    const childId = "01a1967e-child-bc0a-71a2-aea3-8a7689baae80";
+    const allocatedId = "Registry-shared-retirement";
+    const toolCallId = "call-shared-retirement";
+    const parentFile = join(root, "parent.jsonl");
+    const childFile = join(root, parentId, `${allocatedId}.jsonl`);
+    const parentHeader = { type: "session", id: parentId };
+    const childHeader = { type: "session", id: childId, parentSession: parentFile };
+    const taskSummary = `<task-result id="${allocatedId}" agent="worker" status="completed" duration="1s">\n\n<output>\nchild answer\n</output>\n</task-result>`;
+    const taskCall = { type: "message", id: "task-call-entry", message: {
+      role: "assistant", responseId: "task-parent-response", stopReason: "toolUse",
+      content: [{ type: "toolCall", id: toolCallId, name: "task", arguments: { agent: "worker" } }],
+    } };
+    const taskResult = { type: "message", id: "task-result-entry", message: {
+      role: "toolResult", toolName: "task", toolCallId, isError: false,
+      content: [{ type: "text", text: taskSummary }],
+      details: { results: [{ id: allocatedId, exitCode: 0, output: "child answer", truncated: false, aborted: false }] },
+    } };
+    writeSession(parentFile, parentHeader, [taskCall, taskResult]);
+    writeSession(childFile, childHeader, [
+      { type: "message", id: "child-terminal-entry", message: {
+        role: "assistant", responseId: "child-terminal", stopReason: "stop", content: [{ type: "text", text: "child answer" }],
+      } },
+      { type: "custom", customType: OMP_RUN_COMPLETION_ENTRY, data: {
+        version: 1, runId: `omp:task:${allocatedId}`, parentSessionId: parentId, sessionId: childId, responseId: "child-terminal",
+      } },
+    ]);
+
+    try {
+      const versionExecutable = join(root, "omp-version");
+      writeFileSync(versionExecutable, "#!/bin/sh\nprintf 'omp/18.12.6\\n'\n");
+      chmodSync(versionExecutable, 0o755);
+      process.execPath = versionExecutable;
+      process.argv = [versionExecutable, join(root, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js")];
+      process.env.TOKENVISOR_API_KEY = "synthetic-key";
+      process.env.TOKENVISOR_BASE_URL = "http://127.0.0.1:1/api/v1";
+      globalThis.fetch = async () => Response.json({ data: [{ id: "synthetic", type: "chat", capabilities: [] }] });
+
+      const branches = new Map<string, any[]>();
+      let appendedId = 0;
+      const register = async () => {
+        const hooks = new Map<string, Array<(event: any, ctx: any) => unknown>>();
+        const lifecycleListeners: Array<(payload: any) => void> = [];
+        let providerConfig: any;
+        let appendSessionId: string | null = null;
+        await tokenVisorProvider({
+          on: (name: string, handler: any) => hooks.set(name, [...(hooks.get(name) ?? []), handler]),
+          events: { on: (_name: string, handler: any) => { lifecycleListeners.push(handler); return () => {}; }, emit: () => {} },
+          registerCommand: () => {},
+          registerProvider: (_name: string, config: any) => { providerConfig = config; },
+          appendEntry: (customType: string, data: any) => {
+            if (!appendSessionId) throw new Error("missing append session in OMP provider fixture");
+            const branch = branches.get(appendSessionId);
+            if (!branch) throw new Error("missing native branch in OMP provider fixture");
+            branch.push({
+              type: "custom_message",
+              id: `omp-custom-${appendedId++}`,
+              parentId: branch.at(-1)?.id,
+              customType,
+              data,
+            });
+          },
+        } as any);
+        return {
+          hooks,
+          lifecycleListeners,
+          providerConfig,
+          setAppendSession: (sessionId: string) => { appendSessionId = sessionId; },
+        };
+      };
+      const first = await register();
+      const second = await register();
+      const invoke = (instance: typeof first, name: string, event: any, context: any) => {
+        for (const handler of instance.hooks.get(name) ?? []) handler(event, context);
+      };
+      const parentBranch: any[] = [taskCall, taskResult];
+      branches.set(parentId, parentBranch);
+      const parentContext = {
+        agent: { kind: "main" },
+        sessionManager: {
+          getSessionId: () => parentId,
+          getSessionFile: () => parentFile,
+          getHeader: () => parentHeader,
+          getBranch: () => parentBranch,
+        },
+      };
+      invoke(first, "session_start", { reason: "startup" }, parentContext);
+      invoke(second, "session_start", { reason: "startup" }, parentContext);
+      for (const listener of first.lifecycleListeners) listener({
+        status: "started", id: allocatedId, agent: "worker", parentToolCallId: toolCallId,
+        detached: false, sessionFile: childFile,
+      });
+
+      const state = getOmpRuntimeCaptureState();
+      expect(readOmpEarlyTaskDelegation(state, allocatedId, childFile)).toEqual({
+        runId: `omp:task:${allocatedId}`, toolCallId, detached: false,
+      });
+      const filteredResult = {
+        ...taskResult.message,
+        content: [{ type: "text", text: "FILTERED_AFTER_NATIVE_COMMIT" }],
+      };
+      const headers = new Headers();
+      await second.providerConfig.streamSimple(
+        { id: "synthetic", api: "openai-completions", headers },
+        { messages: [taskCall.message, filteredResult] },
+        { sessionId: parentId, headers },
+      ).result();
+      await Promise.resolve();
+      expect(parseAgentMetadata(new Headers((globalThis as any).__OMP_PROVIDER_OPTIONS__?.headers ?? {}).get("x-tokenvisor-agent"))?.depends_on).toEqual([]);
+      expect(state.pendingTaskBindingRetirements.get(parentId)?.get("omp-response")?.bindingIds).toEqual([allocatedId]);
+
+      const childContext = {
+        sessionManager: {
+          getSessionId: () => childId,
+          getSessionFile: () => childFile,
+          getHeader: () => childHeader,
+          getBranch: () => [],
+        },
+      };
+      invoke(second, "session_shutdown", {}, childContext);
+      expect(readOmpEarlyTaskDelegation(state, allocatedId, childFile)).not.toBeNull();
+
+      invoke(first, "agent_end", {}, parentContext);
+      expect(state.pendingTaskBindingRetirements.get(parentId)?.has("omp-response")).toBe(true);
+      expect(readOmpEarlyTaskDelegation(state, allocatedId, childFile)).not.toBeNull();
+
+      parentBranch.push({ type: "message", id: "committed-carrier", message: {
+        role: "assistant", responseId: "omp-response", stopReason: "stop", content: [],
+      } });
+      invoke(first, "agent_end", {}, parentContext);
+      expect(state.pendingTaskBindingRetirements.has(parentId)).toBe(false);
+      expect(readOmpEarlyTaskDelegation(state, allocatedId, childFile)).toBeNull();
+
+      invoke(first, "session_shutdown", {}, parentContext);
+      invoke(second, "session_shutdown", {}, parentContext);
+      branches.delete(parentId);
+
+      if (process.env.TOKENVISOR_OMP_CAPTURE_BENCHMARK === "1") {
+        const quantile = (values: number[], fraction: number) => {
+          const sorted = [...values].sort((left, right) => left - right);
+          return Number(sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)]!.toFixed(3));
+        };
+        const measurements = {
+          baseline: { lifecycle: [] as number[], streamDispatch: [] as number[], streamResult: [] as number[], commit: [] as number[] },
+          foreground_enabled: { lifecycle: [] as number[], streamDispatch: [] as number[], streamResult: [] as number[], commit: [] as number[] },
+        };
+        const fingerprints = new Map<string, string>();
+        const sampleCount = 32;
+        const warmupCount = 8;
+        const traceMark = (sample: number, arm: string, phase: string) => {
+          process.stderr.write(`OMP_BENCHMARK_TRACE ${sample} ${arm} ${phase}\n`);
+        };
+        for (let sample = 0; sample < warmupCount + sampleCount; sample += 1) {
+          for (const arm of ["baseline", "foreground_enabled"] as const) {
+            const suffix = `sample-${sample}`;
+            const sampleParentId = `01a1967e-${suffix}-b925-73fd-b992-d0d11d570d4c`;
+            const sampleChildId = `01a1967e-${suffix}-bc0a-71a2-aea3-8a7689baae80`;
+            const sampleAllocatedId = `Registry-${suffix}`;
+            const sampleToolCallId = `call-${suffix}`;
+            const sampleParentFile = join(root, `${arm}-${suffix}-parent.jsonl`);
+            const sampleChildFile = join(root, `${arm}-${suffix}-child.jsonl`);
+            const sampleParentHeader = { type: "session", id: sampleParentId };
+            const sampleChildHeader = { type: "session", id: sampleChildId, parentSession: sampleParentFile };
+            const sampleOutput = "child answer";
+            const sampleTaskSummary = `<task-result id="${sampleAllocatedId}" agent="worker" status="completed" duration="1s">\n\n<output>\n${sampleOutput}\n</output>\n</task-result>`;
+            const sampleTaskCall = { type: "message", id: `task-call-${suffix}`, message: {
+              role: "assistant", responseId: `task-parent-response-${suffix}`, stopReason: "toolUse",
+              content: [{ type: "toolCall", id: sampleToolCallId, name: "task", arguments: { agent: "worker" } }],
+            } };
+            const sampleTaskResult = { type: "message", id: `task-result-${suffix}`, message: {
+              role: "toolResult", toolName: "task", toolCallId: sampleToolCallId, isError: false,
+              content: [{ type: "text", text: sampleTaskSummary }],
+              details: { results: [{ id: sampleAllocatedId, exitCode: 0, output: sampleOutput, truncated: false, aborted: false }] },
+            } };
+            const sampleChildTerminal = { type: "message", id: `child-terminal-${suffix}`, message: {
+              role: "assistant", responseId: `child-terminal-response-${suffix}`, stopReason: "stop",
+              content: [{ type: "text", text: sampleOutput }],
+            } };
+            writeSession(sampleParentFile, sampleParentHeader, [sampleTaskCall, sampleTaskResult]);
+            writeSession(sampleChildFile, sampleChildHeader, [sampleChildTerminal, {
+              type: "custom", customType: OMP_RUN_COMPLETION_ENTRY, data: {
+                version: 1, runId: `omp:task:${sampleAllocatedId}`, parentSessionId: sampleParentId,
+                sessionId: sampleChildId, responseId: `child-terminal-response-${suffix}`,
+              },
+            }]);
+            const sampleBranch: any[] = [sampleTaskCall, sampleTaskResult];
+            branches.set(sampleParentId, sampleBranch);
+            const sampleContext = {
+              agent: { kind: "main" },
+              sessionManager: {
+                getSessionId: () => sampleParentId,
+                getSessionFile: () => sampleParentFile,
+                getHeader: () => sampleParentHeader,
+                getBranch: () => sampleBranch,
+              },
+            };
+            invoke(first, "session_start", { reason: "startup" }, sampleContext);
+            invoke(second, "session_start", { reason: "startup" }, sampleContext);
+
+            traceMark(sample, arm, "lifecycle-start");
+            const lifecycleStart = performance.now();
+            if (arm === "foreground_enabled") {
+              for (const listener of first.lifecycleListeners) listener({
+                status: "started", id: sampleAllocatedId, agent: "worker", parentToolCallId: sampleToolCallId,
+                detached: false, sessionFile: sampleChildFile,
+              });
+            }
+            const lifecycleEnd = performance.now();
+            traceMark(sample, arm, "lifecycle-end");
+            if (arm === "foreground_enabled") {
+              expect(readOmpEarlyTaskDelegation(state, sampleAllocatedId, sampleChildFile)).toEqual({
+                runId: `omp:task:${sampleAllocatedId}`,
+                toolCallId: sampleToolCallId,
+                detached: false,
+              });
+            }
+
+            const headers = new Headers();
+            const model = { id: "synthetic", api: "openai-completions", headers };
+            const context = { messages: [sampleTaskCall.message, sampleTaskResult.message] };
+            const responseId = `carrier-${arm}-${sample}`;
+            (globalThis as any).__OMP_PROVIDER_RESULT__ = { responseId, stopReason: "stop", content: [] };
+            (globalThis as any).__OMP_PROVIDER_REQUESTS__ = [];
+            traceMark(sample, arm, "stream-start");
+            const dispatchStart = performance.now();
+            const stream = second.providerConfig.streamSimple(model, context, { sessionId: sampleParentId, headers });
+            const dispatchEnd = performance.now();
+            await stream.result();
+            const streamEnd = performance.now();
+            traceMark(sample, arm, "stream-end");
+
+            const requests = (globalThis as any).__OMP_PROVIDER_REQUESTS__ as Array<{ model: any; context: any; options: any }>;
+            expect(requests).toHaveLength(1);
+            const request = requests[0]!;
+            const requestModel = { ...request.model };
+            delete requestModel.headers;
+            const fingerprint = createHash("sha256").update(JSON.stringify({ model: requestModel, context: request.context })).digest("hex");
+            fingerprints.set(`${sample}.${arm}`, fingerprint);
+            const metadata = parseAgentMetadata(new Headers(request.options?.headers ?? {}).get("x-tokenvisor-agent"));
+            expect(metadata?.session.id).toBe(`omp:session:${sampleParentId}`);
+            expect(metadata?.depends_on).toEqual(arm === "baseline" ? [] : [{
+              session_id: `omp:session:${sampleChildId}`,
+              response_id: `child-terminal-response-${suffix}`,
+              run_id: `omp:task:${sampleAllocatedId}`,
+            }]);
+
+            sampleBranch.push({ type: "message", id: `carrier-entry-${suffix}`, message: {
+              role: "assistant", responseId, stopReason: "stop", content: [],
+            } });
+            second.setAppendSession(sampleParentId);
+            traceMark(sample, arm, "commit-start");
+            const commitStart = performance.now();
+            invoke(first, "agent_end", {}, sampleContext);
+            const commitEnd = performance.now();
+            traceMark(sample, arm, "commit-end");
+            expect(state.pendingTaskBindingRetirements.has(sampleParentId)).toBe(false);
+            expect(state.pendingTaskResultConsumptions.has(sampleParentId)).toBe(false);
+            expect(readOmpEarlyTaskDelegation(state, sampleAllocatedId, sampleChildFile)).toBeNull();
+            const samples = sample >= warmupCount ? measurements[arm] : null;
+            if (samples) {
+              samples.lifecycle.push(lifecycleEnd - lifecycleStart);
+              samples.streamDispatch.push(dispatchEnd - dispatchStart);
+              samples.streamResult.push(streamEnd - dispatchEnd);
+              samples.commit.push(commitEnd - commitStart);
+            }
+            invoke(first, "session_shutdown", {}, sampleContext);
+            invoke(second, "session_shutdown", {}, sampleContext);
+            branches.delete(sampleParentId);
+          }
+          expect(fingerprints.get(`${sample}.baseline`)).toBe(fingerprints.get(`${sample}.foreground_enabled`));
+        }
+
+        const report: Record<string, Record<string, [number, number]>> = {};
+        for (const [arm, samples] of Object.entries(measurements)) {
+          report[arm] = Object.fromEntries(Object.entries(samples).map(([stage, values]) => [
+            stage,
+            [quantile(values, 0.5), quantile(values, 0.95)],
+          ]));
+        }
+        console.log("OMP_PROVIDER_CAPTURE_BENCHMARK", JSON.stringify({
+          samplesPerArm: sampleCount,
+          warmupPerArm: warmupCount,
+          inputFingerprintsEqual: true,
+          delegatesPerSampleAndArm: 1,
+          timingsMsP50P95: report,
+          note: "Registered provider hook and stream-result delta over existing identity capture; fake delegate does not measure serialized HTTP body, cache, network, or real delegate latency.",
+        }));
+      }
+    } finally {
+      const state = getOmpRuntimeCaptureState();
+      clearOmpTaskBindingRetirementsForSession(state, parentId);
+      clearOmpEarlyTaskBindingsForSession(state, parentId);
+      process.execPath = oldExecPath;
+      process.argv = oldArgv;
+    }
+  });
+});
+
+if (process.env.TOKENVISOR_PI_FOREGROUND_BENCHMARK === "1") {
+  test("warm foreground handling delta against the existing identity-capture baseline", async () => {
+    const sampleCount = 24;
+    const contract = JSON.parse(readFileSync(new URL("./fixtures/foreground-launch-contract-v1.json", import.meta.url), "utf8")) as {
+      cases: Array<{ name: string; expected: { execution_groups: Record<string, string[]> } }>;
+    };
+    const shapes = [
+      {
+        name: "single",
+        sourceCase: "normal-returned-output",
+        inferenceCount: contract.cases.find((item) => item.name === "normal-returned-output")!.expected.execution_groups["run-a"]!.length,
+      },
+      {
+        name: "multi",
+        sourceCase: "multi-inference-child-span",
+        inferenceCount: contract.cases.find((item) => item.name === "multi-inference-child-span")!.expected.execution_groups["run-c"]!.length,
+      },
+    ];
+    const arms = {
+      baseline: await createHarness(),
+      foreground_enabled: await createHarness(),
+    } as const;
+    const timings = new Map<string, { dispatch: number[]; toolReturn: number[]; header: number[]; stream: number[] }>();
+    const fingerprints: string[] = [];
+    const counts: Record<string, { delegateCalls: number; launches: number; dependencies: number }> = {};
+    const traceRoots = Object.fromEntries(Object.entries(arms).map(([name, harness]) => [name, harness.root]));
+    const quantile = (values: number[], fraction: number) => {
+      const sorted = [...values].sort((left, right) => left - right);
+      return Number(sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)]!.toFixed(3));
+    };
+
+    for (const shape of shapes) {
+      for (let sample = 0; sample < sampleCount; sample += 1) {
+        for (const [armName, harness] of Object.entries(arms)) {
+          const rootId = `bench-parent-${armName}-${shape.name}-${sample}`;
+          const childId = `bench-child-${armName}-${shape.name}-${sample}`;
+          const parentFile = join(harness.root, `${armName}-${shape.name}-${sample}-parent.jsonl`);
+          const childFile = join(harness.root, `${armName}-${shape.name}-${sample}-child.jsonl`);
+          const parentHeader = { type: "session", id: rootId };
+          const childHeader = { type: "session", id: childId, parentSession: parentFile };
+          const history = Array.from({ length: 12 }, (_, index) => ({
+            type: "message",
+            id: `history-${index}`,
+            message: index % 2 === 0
+              ? { role: "user", content: [{ type: "text", text: `synthetic history ${index}` }] }
+              : { role: "assistant", responseId: `history-response-${index}`, stopReason: "stop", content: [{ type: "text", text: `synthetic answer ${index}` }] },
+          }));
+          const parentCall = { type: "message", id: "launch-entry", message: {
+            role: "assistant", responseId: "bench-parent-response", stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "bench-tool-call", name: "subagent", arguments: { agent: "worker" } }],
+          } };
+          const output = "SYNTHETIC_CHILD_ACK";
+          const missionId = "9aebeb6f-a41e-435d-b9eb-67097b0fd578";
+          const toolResultText = `Run fan-out: 1/64 used, 63 remaining\n${output}\nMission: ${missionId} (completed)`;
+          const details = {
+            mode: "single",
+            runId: "bench-run",
+            runFanoutBudget: { used: 1, limit: 64, remaining: 63 },
+            mission: { id: missionId, status: "completed" },
+            results: [{
+              context: "fresh", sessionFile: childFile, exitCode: 0,
+              outputMode: "inline", outputState: "present", finalOutput: output,
+            }],
+          };
+          const toolResult = { type: "message", id: "result-entry", message: {
+            role: "toolResult", toolName: "subagent", toolCallId: "bench-tool-call", isError: false,
+            content: [{ type: "text", text: toolResultText }], details,
+          } };
+          const childMessages = Array.from({ length: shape.inferenceCount }, (_, index) => ({
+            type: "message",
+            id: `child-response-${index}`,
+            message: {
+              role: "assistant",
+              responseId: index === shape.inferenceCount - 1 ? "bench-child-terminal" : `bench-child-intermediate-${index}`,
+              stopReason: "stop",
+              content: [{ type: "text", text: index === shape.inferenceCount - 1 ? output : `synthetic intermediate ${index}` }],
+            },
+          }));
+          writeSession(parentFile, parentHeader, [...history, parentCall, toolResult]);
+          writeSession(childFile, childHeader, childMessages);
+          const branch = [...history, parentCall, toolResult];
+          harness.files.set(rootId, parentFile);
+          harness.headers.set(rootId, parentHeader);
+          harness.branches.set(rootId, branch);
+          harness.appendFor(rootId);
+          const ctx = harness.sessionContext(rootId);
+          harness.hooks.get("session_start")!({ reason: "startup" }, ctx);
+
+          const dispatchStart = performance.now();
+          const handler = harness.hooks.get("tool_result")!;
+          const handlerStart = performance.now();
+          handler(armName === "baseline"
+            ? { toolName: "read" }
+            : { toolName: "subagent", toolCallId: "bench-tool-call", isError: false, content: toolResult.message.content, details }, ctx);
+          const handlerEnd = performance.now();
+          const dispatchEnd = performance.now();
+          const headers = new Headers();
+          const headerStart = performance.now();
+          harness.hooks.get("before_provider_headers")!({ headers }, ctx);
+          const headerEnd = performance.now();
+
+          const messages = [
+            ...history.map((entry) => entry.message),
+            parentCall.message,
+            { role: "toolResult", toolName: "subagent", toolCallId: "bench-tool-call", isError: false, content: toolResult.message.content },
+          ];
+          const context = { messages };
+          (globalThis as any).__PI_FOREGROUND_RESULT__ = { responseId: `bench-carrier-${sample}`, stopReason: "stop", content: [] };
+          (globalThis as any).__PI_CAPTURED_CALLS__ = 0;
+          const model = { id: "synthetic", api: "openai-completions", headers };
+          const streamStart = performance.now();
+          await harness.providerConfig.streamSimple(model, context, { headers }).result();
+          const streamEnd = performance.now();
+          const captured = (globalThis as any).__PI_CAPTURED_REQUEST__;
+          const metadata = parseAgentMetadata(new Headers(captured?.options?.headers ?? {}).get("x-tokenvisor-agent"));
+          const modelInput = { ...captured?.model };
+          delete modelInput.headers;
+          const inputFingerprint = createHash("sha256").update(JSON.stringify({
+            model: modelInput,
+            context: captured?.context,
+          })).digest("hex");
+          fingerprints.push(`${shape.name}:${inputFingerprint}`);
+          const key = `${armName}.${shape.name}`;
+          const item = timings.get(key) ?? { dispatch: [], toolReturn: [], header: [], stream: [] };
+          item.dispatch.push(dispatchEnd - dispatchStart);
+          item.toolReturn.push(handlerEnd - handlerStart);
+          item.header.push(headerEnd - headerStart);
+          item.stream.push(streamEnd - streamStart);
+          timings.set(key, item);
+          const count = counts[key] ?? { delegateCalls: 0, launches: 0, dependencies: 0 };
+          count.delegateCalls += (globalThis as any).__PI_CAPTURED_CALLS__;
+          count.launches += metadata?.child_launches.length ?? 0;
+          count.dependencies += metadata?.depends_on?.length ?? 0;
+          counts[key] = count;
+
+          harness.hooks.get("session_shutdown")!({}, ctx);
+          harness.branches.delete(rootId);
+          harness.files.delete(rootId);
+          harness.headers.delete(rootId);
+        }
+      }
+    }
+
+    const summary = Object.fromEntries([...timings].map(([key, values]) => [key, Object.fromEntries(
+      Object.entries(values).map(([metric, samples]) => [metric, { p50_ms: quantile(samples, 0.5), p95_ms: quantile(samples, 0.95) }]),
+    )]));
+    expect(counts["baseline.single"]?.launches).toBe(0);
+    expect(counts["baseline.single"]?.dependencies).toBe(0);
+    expect(counts["foreground_enabled.single"]?.launches).toBe(sampleCount);
+    expect(counts["foreground_enabled.single"]?.dependencies).toBe(sampleCount);
+    expect(counts["foreground_enabled.multi"]?.launches).toBe(sampleCount);
+    expect(counts["foreground_enabled.multi"]?.dependencies).toBe(sampleCount);
+    expect(new Set(fingerprints.map((item) => item.split(":")[1])).size).toBe(1);
+    console.log(`PI_FOREGROUND_BENCHMARK ${JSON.stringify({
+      classification: "foreground-handling delta over existing identity capture; not total capture overhead",
+      samples_per_arm_shape: sampleCount,
+      child_inference_shapes: shapes.map(({ name, sourceCase, inferenceCount }) => ({ name, source_case: sourceCase, inference_count: inferenceCount })),
+      timings: summary,
+      counts,
+      delegate_body_input_fingerprint_equal: new Set(fingerprints.map((item) => item.split(":")[1])).size === 1,
+      prior_state_release_regression: { test: "releases native child session contexts after repeated Pi startup and shutdown", sessions: 48, gc_cycles: 3 },
+      trace_roots: traceRoots,
+      limitations: ["fake Pi AI delegate observes model/context inputs, not serialized HTTP body or cache hits"],
+    })}`);
+  });
+}

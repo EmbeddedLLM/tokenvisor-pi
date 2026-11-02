@@ -2,9 +2,9 @@ import { encodeAgentMetadata, type AgentMetadata, type MetadataIdentity } from "
 import { readNativeSessionHeader, readNativeSessionRootId } from "./native-session.ts";
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from "fs";
 import { dirname, join, basename } from "path";
+import { isDeepStrictEqual } from "util";
 
 export const OMP_EXTENSION_VERSION = "1.1.0-dev";
-export const OMP_RUNNER_VERSION = "18.12.6";
 export const OMP_RUN_COMPLETION_ENTRY = "tokenvisor-agent-run-completion-v1";
 export const OMP_TASK_RESULT_CONSUMPTION_ENTRY = "tokenvisor-agent-task-result-consumption-v1";
 const PI_FORK_ROOT_ENTRY = "tokenvisor-agent-fork-root-v1";
@@ -67,6 +67,7 @@ export interface OmpCaptureContext {
 export interface OmpSequenceStream {
   anchorId: string | null;
   responseId: string | null;
+  streamSucceeded: boolean;
   terminal: boolean;
 }
 
@@ -137,9 +138,13 @@ export function resolveOmpNativeSequence(
         state.responseByUsageId.set(entry.id, null);
       } else {
         const [streamId, stream] = matches[0];
-        const failed = entry.stopReason === "error" ||
+        // Request identity can be recovered only when native and provider
+        // terminal outcomes agree. An observed ID on an abort is sequence proof,
+        // not successful output consumption.
+        const failed = entry.stopReason === "error" || entry.stopReason === "aborted" ||
           (typeof entry.errorMessage === "string" && entry.errorMessage.length > 0);
-        state.responseByUsageId.set(entry.id, failed ? null : stream.responseId);
+        const streamFailed = !stream.streamSucceeded;
+        state.responseByUsageId.set(entry.id, failed === streamFailed ? stream.responseId : null);
         state.pending.delete(streamId);
       }
     }
@@ -180,17 +185,19 @@ export function recordOmpSequenceStream(
   anchorId: string | null,
 ): void {
   if (state.pending.size >= 16) state.pending.clear();
-  state.pending.set(streamId, { anchorId, responseId: null, terminal: false });
+  state.pending.set(streamId, { anchorId, responseId: null, streamSucceeded: false, terminal: false });
 }
 
 export function recordOmpSequenceResult(
   state: OmpSequenceState,
   streamId: string,
   responseId: string | null,
+  streamSucceeded = responseId !== null,
 ): void {
   const stream = state.pending.get(streamId);
   if (!stream) return;
   stream.responseId = responseId;
+  stream.streamSucceeded = streamSucceeded;
   stream.terminal = true;
 }
 
@@ -213,8 +220,271 @@ export interface OmpRuntimeCaptureState {
   appendEntryBySession: Map<string, (customType: string, data?: unknown) => void>;
   sequenceBySession: Map<string, OmpSequenceState>;
   pendingTaskResultConsumptions: Map<string, Map<string, OmpTaskResultReference[]>>;
+  pendingTaskBindingRetirements: Map<string, Map<string, OmpPendingTaskBindingRetirement>>;
   compactionTaskResultReferences: Map<string, OmpTaskResultReference[]>;
   taskResultReferencesByStream: Map<string, OmpTaskResultStreamReferences>;
+  earlyTaskBindings: Map<string, OmpEarlyTaskBinding | OmpEarlyTaskBindingConflict>;
+}
+
+export interface OmpCompactionFrontierAssessment {
+  sourceProvenMechanicalCompaction: boolean;
+  hasUnresolvedInputs: boolean;
+}
+
+/**
+ * Assess an OMP compaction once, at the committed compaction hook. This keeps
+ * native method proof separate from pending child/peer output; callers may
+ * use mechanical proof to carry an empty frontier only when both are clear.
+ */
+export function assessOmpCompactionFrontier(
+  state: OmpRuntimeCaptureState,
+  sessionId: string,
+  event: unknown,
+): OmpCompactionFrontierAssessment {
+  const branchReader = state.branchReaders.get(sessionId);
+  if (!branchReader) return { sourceProvenMechanicalCompaction: false, hasUnresolvedInputs: true };
+
+  let branch: Array<Record<string, any>>;
+  try {
+    branch = branchReader();
+  } catch {
+    return { sourceProvenMechanicalCompaction: false, hasUnresolvedInputs: true };
+  }
+  if (!Array.isArray(branch) || !event || typeof event !== "object") {
+    return { sourceProvenMechanicalCompaction: false, hasUnresolvedInputs: true };
+  }
+
+  const payload = event as Record<string, any>;
+  const committed = payload.compactionEntry;
+  if (!committed || typeof committed !== "object" || committed.type !== "compaction" ||
+      !isNativeId(committed.id) || !isNativeId(committed.firstKeptEntryId)) {
+    return { sourceProvenMechanicalCompaction: false, hasUnresolvedInputs: true };
+  }
+  const compactions = branch.filter((entry) => entry.type === "compaction");
+  const matchingCommits = compactions.filter((entry) => entry.id === committed.id);
+  const latestCommit = compactions.at(-1);
+  if (matchingCommits.length !== 1 || latestCommit !== matchingCommits[0] ||
+      latestCommit?.firstKeptEntryId !== committed.firstKeptEntryId ||
+      latestCommit?.method !== committed.method ||
+      latestCommit?.fromExtension !== committed.fromExtension) {
+    return { sourceProvenMechanicalCompaction: false, hasUnresolvedInputs: true };
+  }
+
+  const sourceProvenMechanicalCompaction = payload.fromExtension === false &&
+    committed.fromExtension === false && committed.method === "snapcompact";
+  const hasUnresolvedInputs = hasPendingOmpCompactionInputs(state, sessionId, branch);
+  return { sourceProvenMechanicalCompaction, hasUnresolvedInputs };
+}
+
+function hasPendingOmpCompactionInputs(
+  state: OmpRuntimeCaptureState,
+  sessionId: string,
+  branch: Array<Record<string, any>>,
+): boolean {
+  if ((state.pendingTaskResultConsumptions.get(sessionId)?.size ?? 0) > 0 ||
+      (state.pendingTaskBindingRetirements.get(sessionId)?.size ?? 0) > 0 ||
+      (state.compactionTaskResultReferences.get(sessionId)?.length ?? 0) > 0) return true;
+
+  for (const binding of state.earlyTaskBindings.values()) {
+    if (binding.parentSessionId === sessionId) return true;
+  }
+
+  const consumed = readOmpConsumedTaskResultReferences(branch, sessionId);
+  if (!consumed) return true;
+  let latestAssistantIndex = -1;
+  for (let index = 0; index < branch.length; index += 1) {
+    const entry = branch[index]!;
+    const message = entry.message && typeof entry.message === "object" ? entry.message : entry;
+    if (message.role === "assistant" && isNativeId(message.responseId)) latestAssistantIndex = index;
+  }
+  const pendingDeliverySuffix = branch.slice(latestAssistantIndex + 1);
+
+  // Automatic async-result messages lack response-specific sources. Only a
+  // result after the latest identified assistant response remains pending.
+  for (const entry of pendingDeliverySuffix) {
+    const message = entry.message && typeof entry.message === "object" ? entry.message : entry;
+    if (message.customType === "async-result" || entry.customType === "async-result" || entry.type === "custom_message" &&
+        entry.customType === "async-result") return true;
+  }
+
+  for (const entry of pendingDeliverySuffix) {
+    const message = entry.message && typeof entry.message === "object" ? entry.message : entry;
+    const details = message.details ?? entry.details;
+    if ((message.role !== "toolResult" && message.role !== "tool_result") ||
+        details?.op !== "wait" && details?.op !== "cancel") continue;
+    const hasCompletedTaskOutput = Array.isArray(details?.jobs) && details.jobs.some((job: any) =>
+      job?.type === "task" && job.status === "completed" &&
+      (Object.hasOwn(job, "resultText") || Object.hasOwn(job, "structured")),
+    );
+    if (!hasCompletedTaskOutput) continue;
+    if (!isNativeId(entry.id) || !consumed.deliveryIds.has(entry.id)) return true;
+  }
+
+  return hasUnresolvedOmpPeerWake(branch);
+}
+
+export interface OmpEarlyTaskBindingConflict {
+  parentSessionId: string;
+  agentId: string;
+  toolCallIds: string[];
+  conflict: true;
+}
+
+export interface OmpPendingTaskBindingRetirement {
+  streamId: string;
+  bindingIds: string[];
+}
+
+export interface OmpEarlyTaskBinding {
+  parentSessionId: string;
+  parentSessionFile: string;
+  rootSessionId: string;
+  agentId: string;
+  toolCallId: string;
+  childSessionFile: string;
+  childSessionId: string;
+  detached: boolean;
+}
+
+const MAX_OMP_EARLY_TASK_BINDINGS_PER_PARENT = 64;
+
+function earlyTaskBindingKey(parentSessionId: string, agentId: string): string {
+  return JSON.stringify([parentSessionId, agentId]);
+}
+
+/** Capture OMP's started event before its first child provider call, retaining only verified identity. */
+export function registerOmpTaskLifecycleStarted(
+  state: OmpRuntimeCaptureState,
+  parentSessionFile: string | undefined,
+  parentSessionId: string,
+  event: unknown,
+): boolean {
+  if (!parentSessionFile || !isNativeId(parentSessionId) || !event || typeof event !== "object") return false;
+  const payload = event as Record<string, unknown>;
+  if (payload.status !== "started" || !isNativeId(payload.id) || !isNativeId(payload.parentToolCallId) ||
+      typeof payload.sessionFile !== "string" || typeof payload.detached !== "boolean" || payload.detached) return false;
+
+  let canonicalParentFile: string;
+  let canonicalChildFile: string;
+  try {
+    canonicalParentFile = realpathSync(parentSessionFile);
+    canonicalChildFile = realpathSync(payload.sessionFile);
+  } catch {
+    return false;
+  }
+  const parentHeader = readNativeSessionHeader(canonicalParentFile);
+  const childHeader = readNativeSessionHeader(canonicalChildFile);
+  const rootSessionId = readNativeSessionRootId(canonicalParentFile);
+  if (parentHeader?.id !== parentSessionId || !childHeader?.parentSession ||
+      childHeader.parentSession !== canonicalParentFile || !isNativeId(childHeader.id) ||
+      readNativeSessionRootId(canonicalChildFile) !== rootSessionId || !rootSessionId) return false;
+
+  const key = earlyTaskBindingKey(parentSessionId, payload.id);
+  const existing = state.earlyTaskBindings.get(key);
+  const binding: OmpEarlyTaskBinding = {
+    parentSessionId,
+    parentSessionFile: canonicalParentFile,
+    rootSessionId,
+    agentId: payload.id,
+    toolCallId: payload.parentToolCallId,
+    childSessionFile: canonicalChildFile,
+    childSessionId: childHeader.id,
+    detached: payload.detached,
+  };
+  if (existing !== undefined) {
+    if ("conflict" in existing || !isDeepStrictEqual(existing, binding)) {
+      const toolCallIds = "conflict" in existing
+        ? [...existing.toolCallIds, payload.parentToolCallId]
+        : [existing.toolCallId, payload.parentToolCallId];
+      state.earlyTaskBindings.set(key, {
+        parentSessionId,
+        agentId: payload.id,
+        toolCallIds: [...new Set(toolCallIds)],
+        conflict: true,
+      });
+      return false;
+    }
+    return true;
+  }
+  let parentBindingCount = 0;
+  for (const value of state.earlyTaskBindings.values()) {
+    if (value.parentSessionId === parentSessionId) parentBindingCount += 1;
+  }
+  if (parentBindingCount >= MAX_OMP_EARLY_TASK_BINDINGS_PER_PARENT) return false;
+  state.earlyTaskBindings.set(key, binding);
+  return true;
+}
+
+/** Resolve the started event against a child provider's native session, never its display name. */
+export function readOmpEarlyTaskDelegation(
+  state: OmpRuntimeCaptureState,
+  childAgentId: string | undefined,
+  childSessionFile: string | undefined,
+): (MetadataIdentity["delegation"] & { detached: false }) | null {
+  if (!isNativeId(childAgentId) || !childSessionFile) return null;
+  let canonicalChildFile: string;
+  try { canonicalChildFile = realpathSync(childSessionFile); } catch { return null; }
+  const childHeader = readNativeSessionHeader(canonicalChildFile);
+  if (!childHeader?.parentSession) return null;
+  let canonicalParentFile: string;
+  try { canonicalParentFile = realpathSync(childHeader.parentSession); } catch { return null; }
+  const parentHeader = readNativeSessionHeader(canonicalParentFile);
+  if (!parentHeader) return null;
+  const binding = state.earlyTaskBindings.get(earlyTaskBindingKey(parentHeader.id, childAgentId));
+  if (!binding || "conflict" in binding || binding.detached || binding.agentId !== childAgentId ||
+      binding.childSessionFile !== canonicalChildFile || binding.childSessionId !== childHeader.id ||
+      binding.parentSessionFile !== canonicalParentFile || binding.parentSessionId !== parentHeader.id ||
+      binding.rootSessionId !== readNativeSessionRootId(canonicalChildFile) ||
+      binding.rootSessionId !== readNativeSessionRootId(canonicalParentFile) ||
+      childHeader.parentSession !== canonicalParentFile) return null;
+  return { runId: `omp:task:${binding.agentId}`, toolCallId: binding.toolCallId, detached: false };
+}
+
+/** Drop launch bindings owned by the session when its parent lifecycle ends. */
+export function clearOmpEarlyTaskBindingsForSession(
+  state: OmpRuntimeCaptureState,
+  sessionId: string,
+): void {
+  for (const [key, binding] of state.earlyTaskBindings) {
+    if (binding.parentSessionId === sessionId) state.earlyTaskBindings.delete(key);
+  }
+}
+
+/** Retire one binding only after the parent's result-consumption marker commits. */
+export function retireOmpEarlyTaskBinding(
+  state: OmpRuntimeCaptureState,
+  parentSessionId: string,
+  agentId: string,
+): void {
+  if (!isNativeId(parentSessionId) || !isNativeId(agentId)) return;
+  state.earlyTaskBindings.delete(earlyTaskBindingKey(parentSessionId, agentId));
+}
+
+/** Queue verified launch IDs until the matching parent response is committed. */
+export function queueOmpTaskBindingRetirement(
+  state: OmpRuntimeCaptureState,
+  sessionId: string,
+  responseId: string,
+  streamId: string,
+  bindingIds: string[],
+): boolean {
+  if (!isNativeId(sessionId) || !isNativeId(responseId) || !isNativeId(streamId) || bindingIds.length === 0 ||
+      bindingIds.some((bindingId) => !isNativeId(bindingId))) return false;
+  const current = state.pendingTaskBindingRetirements.get(sessionId) ?? new Map();
+  const next = { streamId, bindingIds: [...new Set(bindingIds)] };
+  const existing = current.get(responseId);
+  if (existing) return isDeepStrictEqual(existing, next);
+  if (current.size >= 64) return false;
+  current.set(responseId, next);
+  state.pendingTaskBindingRetirements.set(sessionId, current);
+  return true;
+}
+
+export function clearOmpTaskBindingRetirementsForSession(
+  state: OmpRuntimeCaptureState,
+  sessionId: string,
+): void {
+  state.pendingTaskBindingRetirements.delete(sessionId);
 }
 
 export interface OmpTaskResultReference {
@@ -234,6 +504,20 @@ interface OmpTaskResultCompletion {
   sessionId: string;
   responseId: string;
   runId: string;
+}
+
+interface OmpNativeAssistantMessage {
+  responseId: string | null;
+  stopReason?: string;
+  content?: unknown[];
+}
+
+interface OmpChildSessionEvidence {
+  sessionId: string;
+  completions: OmpTaskResultCompletion[];
+  assistantMessages: OmpNativeAssistantMessage[];
+  latestAssistantResponseId: string | null;
+  toolResults: Array<Record<string, any>>;
 }
 
 type OmpTaskResultConsumer = { type: "assistant" | "compaction"; id: string };
@@ -389,14 +673,18 @@ export function getOmpRuntimeCaptureState(): OmpRuntimeCaptureState {
     appendEntryBySession: new Map(),
     sequenceBySession: new Map(),
     pendingTaskResultConsumptions: new Map(),
+    pendingTaskBindingRetirements: new Map(),
     compactionTaskResultReferences: new Map(),
     taskResultReferencesByStream: new Map(),
+    earlyTaskBindings: new Map(),
   } satisfies OmpRuntimeCaptureState;
   runtime[OMP_LINEAGE_STATE].sequenceBySession ??= new Map();
   runtime[OMP_LINEAGE_STATE].pendingTaskResultConsumptions ??= new Map();
+  runtime[OMP_LINEAGE_STATE].pendingTaskBindingRetirements ??= new Map();
   runtime[OMP_LINEAGE_STATE].appendEntryBySession ??= new Map();
   runtime[OMP_LINEAGE_STATE].compactionTaskResultReferences ??= new Map();
   runtime[OMP_LINEAGE_STATE].taskResultReferencesByStream ??= new Map();
+  runtime[OMP_LINEAGE_STATE].earlyTaskBindings ??= new Map();
   return runtime[OMP_LINEAGE_STATE] as OmpRuntimeCaptureState;
 }
 
@@ -432,7 +720,13 @@ export function readOmpTaskResultDependencies(
       pendingTaskCalls.set(progress.id, found);
     }
   }
-  const deliveryCandidates: Array<{ jobId: string; agentUrlId: string; deliveryId: string }> = [];
+  const deliveryCandidates: Array<{
+    jobId: string;
+    agentUrlId: string;
+    deliveryId: string;
+    resultText?: unknown;
+    structured?: unknown;
+  }> = [];
   for (const raw of branch.slice(lastAssistantIndex + 1)) {
     const message = raw.message && typeof raw.message === "object" ? raw.message : raw;
     const details = message.details ?? raw.details;
@@ -458,37 +752,54 @@ export function readOmpTaskResultDependencies(
       if (!candidateDetails || candidateDetails.op !== "wait" && candidateDetails.op !== "cancel" || !Array.isArray(candidateDetails.jobs)) return null;
       if (!candidateDetails.jobs.some((candidateJob: any) =>
         candidateJob?.id === jobId && candidateJob?.agentUrlId === agentUrlId && candidateJob?.type === "task" && candidateJob?.status === "completed" &&
-        (Object.hasOwn(candidateJob, "resultText") || Object.hasOwn(candidateJob, "structured")),
+        (Object.hasOwn(candidateJob, "resultText") || Object.hasOwn(candidateJob, "structured")) &&
+        candidateJob?.resultText === job.resultText && isDeepStrictEqual(candidateJob?.structured, job.structured),
       )) return null;
-      deliveryCandidates.push({ jobId, agentUrlId, deliveryId });
+      deliveryCandidates.push({ jobId, agentUrlId, deliveryId, resultText: job.resultText, structured: job.structured });
     }
   }
   if (deliveryCandidates.length === 0) return { dependencies: [], references: [] };
   if (!parentSessionFile || readNativeSessionHeader(parentSessionFile)?.id !== parentSessionId) return null;
   const consumed = readOmpConsumedTaskResultReferences(branch, parentSessionId);
   if (!consumed) return null;
-  const uniqueCandidates = new Map<string, { jobId: string; agentUrlId: string; deliveryId: string }>();
+  const uniqueCandidates = new Map<string, {
+    jobId: string;
+    agentUrlId: string;
+    deliveryId: string;
+    resultText?: unknown;
+    structured?: unknown;
+  }>();
   for (const candidate of deliveryCandidates) {
     const key = JSON.stringify([candidate.deliveryId, candidate.jobId]);
     if (uniqueCandidates.has(key)) continue;
     if (consumed.deliveryIds.has(candidate.deliveryId)) continue;
-    if ([...uniqueCandidates.values()].some((previous) => previous.agentUrlId === candidate.agentUrlId)) return null;
     uniqueCandidates.set(key, candidate);
   }
   if (uniqueCandidates.size === 0) return { dependencies: [], references: [] };
   const dependencies: NonNullable<AgentMetadata["depends_on"]> = [];
   const references: OmpTaskResultReference[] = [];
   const usedReferences = new Set<string>();
-  for (const { jobId, agentUrlId, deliveryId } of uniqueCandidates.values()) {
+  for (const { jobId, agentUrlId, deliveryId, resultText, structured } of uniqueCandidates.values()) {
     const runId = `omp:task:${agentUrlId}`;
     const taskCalls = [...new Set(pendingTaskCalls.get(agentUrlId) ?? [])];
     if (taskCalls.length !== 1 || calls.filter((id) => id === taskCalls[0]).length !== 1) return null;
     const childFile = join(dirname(parentSessionFile), basename(parentSessionFile, ".jsonl"), `${agentUrlId}.jsonl`);
-    const completions = readOmpRunCompletions(childFile, parentSessionId, runId);
-    if (!completions) return null;
-    const available = completions.filter((completion) => !consumed.references.has(taskResultReferenceKey(completion)));
-    if (available.length !== 1) return null;
-    const completion = { ...available[0], deliveryId, jobId };
+    const child = readOmpChildSessionEvidence(childFile, parentSessionId, runId);
+    if (!child) return null;
+    const matchingResponseIds = readOmpTaskResultResponseIds(
+      { agentUrlId, resultText, structured },
+      child.assistantMessages,
+      child.toolResults,
+      child.completions.map((completion) => completion.responseId),
+    );
+    if (matchingResponseIds.length !== 1) return null;
+    const completion = {
+      sessionId: child.sessionId,
+      responseId: matchingResponseIds[0],
+      runId,
+      deliveryId,
+      jobId,
+    };
     const completionKey = taskResultReferenceKey(completion);
     if (usedReferences.has(completionKey)) return null;
     usedReferences.add(completionKey);
@@ -497,6 +808,389 @@ export function readOmpTaskResultDependencies(
   }
   if (dependencies.length > 8) return null;
   return { dependencies, references };
+}
+
+function earlyTaskBindingsForToolCall(
+  state: OmpRuntimeCaptureState,
+  parentSessionId: string,
+  toolCallId: string,
+): Array<OmpEarlyTaskBinding | OmpEarlyTaskBindingConflict> {
+  return [...state.earlyTaskBindings.values()].filter((binding) =>
+    binding.parentSessionId === parentSessionId &&
+    ("conflict" in binding ? binding.toolCallIds.includes(toolCallId) : binding.toolCallId === toolCallId),
+  );
+}
+
+/** Resolve only a successful blocking task result whose ordinary tool output is in this request. */
+export function readOmpBlockingTaskResultDependencies(
+  state: OmpRuntimeCaptureState,
+  parentSessionFile: string | undefined,
+  parentSessionId: string,
+  branch: Array<Record<string, any>>,
+  effectiveMessages: Array<Record<string, any>>,
+): {
+  dependencies: AgentMetadata["depends_on"];
+  references: OmpTaskResultReference[];
+  bindingIds: string[];
+} | null {
+  let latestAssistantIndex = -1;
+  const toolCalls = new Map<string, Array<{ responseId: string | null; name: unknown; index: number }>>();
+  for (let index = 0; index < branch.length; index += 1) {
+    const raw = branch[index];
+    const message = raw.message && typeof raw.message === "object" ? raw.message : raw;
+    if (message.role !== "assistant") continue;
+    latestAssistantIndex = index;
+    for (const part of Array.isArray(message.content) ? message.content : []) {
+      if ((part?.type !== "toolCall" && part?.type !== "tool_call") || !isNativeId(part.id)) continue;
+      const matches = toolCalls.get(part.id) ?? [];
+      matches.push({ responseId: isNativeId(message.responseId) ? message.responseId : null, name: part.name, index });
+      toolCalls.set(part.id, matches);
+    }
+  }
+
+  const hasCurrentTaskResult = branch.some((raw, index) => {
+    if (index <= latestAssistantIndex) return false;
+    const message = raw.message && typeof raw.message === "object" ? raw.message : raw;
+    return message.role === "toolResult" && message.toolName === "task" &&
+      isNativeId(message.toolCallId) && isNativeId(raw.id);
+  });
+  if (!hasCurrentTaskResult) return { dependencies: [], references: [], bindingIds: [] };
+
+  if (!parentSessionFile || readNativeSessionHeader(parentSessionFile)?.id !== parentSessionId) return null;
+  const consumed = readOmpConsumedTaskResultReferences(branch, parentSessionId);
+  if (!consumed) return null;
+
+  const dependencies: NonNullable<AgentMetadata["depends_on"]> = [];
+  const references: OmpTaskResultReference[] = [];
+  const bindingIds: string[] = [];
+  let unavailable = false;
+  for (let index = latestAssistantIndex + 1; index < branch.length; index += 1) {
+    const raw = branch[index];
+    const message = raw.message && typeof raw.message === "object" ? raw.message : raw;
+    const details = message.details ?? raw.details;
+    if (message.role !== "toolResult" || message.toolName !== "task" ||
+        !isNativeId(message.toolCallId) || !isNativeId(raw.id)) continue;
+    const knownBindings = earlyTaskBindingsForToolCall(state, parentSessionId, message.toolCallId);
+    if (knownBindings.length === 0) continue;
+    for (const known of knownBindings) {
+      if (!bindingIds.includes(known.agentId)) bindingIds.push(known.agentId);
+    }
+    const callMatches = toolCalls.get(message.toolCallId) ?? [];
+    if (callMatches.length !== 1 || callMatches[0].name !== "task" || !callMatches[0].responseId ||
+        callMatches[0].index >= index) {
+      unavailable = true;
+      continue;
+    }
+    const effectiveMatches = effectiveMessages.filter((candidate) =>
+      candidate.role === "toolResult" && candidate.toolName === "task" && candidate.toolCallId === message.toolCallId,
+    );
+    if (effectiveMatches.length === 0) continue;
+    if (effectiveMatches.length !== 1) {
+      unavailable = true;
+      continue;
+    }
+    if (!isDeepStrictEqual(effectiveMatches[0].content, message.content)) continue;
+
+    const results = Array.isArray(details?.results) ? details.results : [];
+    if (results.length === 0) {
+      unavailable = true;
+      continue;
+    }
+    if (message.isError === true) continue;
+    const successfulResults = results.filter((result: any) =>
+      result && result.exitCode === 0 && result.aborted !== true && result.error === undefined &&
+      typeof result.output === "string" && result.output.length > 0,
+    );
+    if (successfulResults.length === 0) continue;
+    if (consumed.deliveryIds.has(raw.id)) continue;
+    if (results.length !== 1 || knownBindings.length !== 1 || "conflict" in knownBindings[0]) {
+      unavailable = true;
+      continue;
+    }
+    const result = results[0];
+    if (!result || !isNativeId(result.id)) {
+      unavailable = true;
+      continue;
+    }
+    const binding = state.earlyTaskBindings.get(earlyTaskBindingKey(parentSessionId, result.id));
+    if (!binding || "conflict" in binding || binding.detached || binding.toolCallId !== message.toolCallId) {
+      unavailable = true;
+      continue;
+    }
+    if (binding.agentId !== knownBindings[0].agentId || binding.toolCallId !== message.toolCallId) {
+      unavailable = true;
+      continue;
+    }
+    const earlyDelegation = readOmpEarlyTaskDelegation(state, result.id, binding.childSessionFile);
+    if (!earlyDelegation || earlyDelegation.toolCallId !== message.toolCallId) {
+      unavailable = true;
+      continue;
+    }
+    if (result.truncated === true) {
+      unavailable = true;
+      continue;
+    }
+    if (typeof result.output !== "string" || result.output.length === 0) continue;
+    const outputTexts = Array.isArray(message.content)
+      ? message.content.flatMap((part: any) => part?.type === "text" && typeof part.text === "string" ? [part.text] : [])
+      : [];
+    if (outputTexts.length === 0) continue;
+    if (outputTexts.length !== 1) {
+      unavailable = true;
+      continue;
+    }
+    if (!outputTexts[0].startsWith(`<task-result`)) continue;
+    if (!outputTexts[0].startsWith(`<task-result id="${result.id}" `)) {
+      unavailable = true;
+      continue;
+    }
+    const formattedOutput = taskResultOutputSlot(outputTexts[0], result.id);
+    if (formattedOutput === null || formatOmpPlainTaskResultOutput(formattedOutput) !== formatOmpPlainTaskResultOutput(result.output)) {
+      unavailable = true;
+      continue;
+    }
+
+    const child = readOmpChildSessionEvidence(binding.childSessionFile, parentSessionId, earlyDelegation.runId);
+    if (!child || child.sessionId !== binding.childSessionId) {
+      unavailable = true;
+      continue;
+    }
+    const responseIds = readOmpTaskResultResponseIds(
+      { agentUrlId: result.id, resultText: outputTexts[0], structured: result.structuredOutput },
+      child.assistantMessages,
+      child.toolResults,
+      child.completions.map((completion) => completion.responseId),
+    );
+    if (responseIds.length !== 1) {
+      unavailable = true;
+      continue;
+    }
+    const responseId = responseIds[0];
+    const responseMatches = child.assistantMessages.filter((assistant) => assistant.responseId === responseId);
+    if (responseMatches.length !== 1) {
+      unavailable = true;
+      continue;
+    }
+    const yieldResponseIds = result.structuredOutput !== undefined
+      ? readOmpFinalYieldResponseIds(result.structuredOutput, child.assistantMessages, child.toolResults)
+      : readOmpRenderedYieldResponseIds(formattedOutput, child.assistantMessages, child.toolResults);
+    const isExactYieldResponse = yieldResponseIds !== null && yieldResponseIds.includes(responseId);
+    if (yieldResponseIds === null || (!isExactYieldResponse &&
+        (responseId !== child.latestAssistantResponseId || !child.completions.some((completion) => completion.responseId === responseId)))) {
+      unavailable = true;
+      continue;
+    }
+    const reference: OmpTaskResultReference = {
+      sessionId: child.sessionId,
+      responseId,
+      runId: earlyDelegation.runId,
+      deliveryId: raw.id,
+      jobId: result.id,
+    };
+    if (consumed.references.has(taskResultReferenceKey(reference))) continue;
+    if (references.some((previous) => taskResultReferenceKey(previous) === taskResultReferenceKey(reference))) {
+      unavailable = true;
+      continue;
+    }
+    dependencies.push({
+      session_id: `omp:session:${child.sessionId}`,
+      response_id: responseId,
+      run_id: earlyDelegation.runId,
+    });
+    references.push(reference);
+  }
+  if (dependencies.length > 8) return { dependencies: null, references: [], bindingIds };
+  return { dependencies: unavailable ? null : dependencies, references, bindingIds };
+}
+
+function taskResultOutputSlot(resultText: string, agentUrlId: string): string | null {
+  if (!resultText.startsWith(`<task-result id="${agentUrlId}" `)) return null;
+  const open = "\n<output>\n";
+  const close = "\n</output>\n</task-result>";
+  const start = resultText.indexOf(open);
+  const end = resultText.lastIndexOf(close);
+  if (start < 0 || end < start || resultText.indexOf(open, start + open.length) >= 0 ||
+    resultText.lastIndexOf(close) !== resultText.indexOf(close)) return null;
+  const envelope = `${resultText.slice(0, start)}${resultText.slice(end + close.length)}`;
+  if (envelope.includes("<preview ") || envelope.includes("<meta ") || envelope.includes("<error>") ||
+    envelope.includes("<abort-reason>") || envelope.includes("<merge-summary>")) return null;
+  return resultText.slice(start + open.length, end);
+}
+
+/** Mirror the output-relevant part of OMP's pinned `prompt.format()` behavior. */
+function formatOmpPlainTaskResultOutput(value: string): string {
+  const escaped = value.replace(/<(?=\s*\/?\s*(?:irc|system-[a-z][a-z-]*)(?![\w-]))/gi, "&lt;").trim();
+  const rawLines = escaped.split("\n");
+  const lines: string[] = [];
+  let inCodeBlock = false;
+  for (let index = 0; index < rawLines.length; index += 1) {
+    let line = rawLines[index].trimEnd();
+    const indent = line.length - line.trimStart().length;
+    const trimmed = line.slice(indent);
+    const isFence = trimmed.startsWith("```") || trimmed.startsWith("~~~");
+    if (isFence) {
+      inCodeBlock = !inCodeBlock;
+      lines.push(line);
+      continue;
+    }
+    if (inCodeBlock) {
+      lines.push(line);
+      continue;
+    }
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      if (/^\|[-:\s|]+\|$/.test(trimmed)) {
+        const cells = trimmed.split("|").filter((cell) => cell.trim());
+        line = `${line.slice(0, indent)}|${cells.map((cell) => {
+          const value = cell.trim();
+          const left = value.startsWith(":");
+          const right = value.endsWith(":");
+          return left && right ? ":---:" : left ? ":---" : right ? "---:" : "---";
+        }).join("|")}|`;
+      } else {
+        line = `${line.slice(0, indent)}${trimmed.split("|").map((cell) => cell.trim()).join("|")}`;
+      }
+    }
+    if (!line) {
+      const next = rawLines[index + 1];
+      if (next === undefined || next.length === 0 || !/\S/.test(next)) {
+        while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+        while (index + 1 < rawLines.length && !/\S/.test(rawLines[index + 1])) index += 1;
+        continue;
+      }
+      if (lines.length === 0 || lines[lines.length - 1] === "") continue;
+    }
+    if (trimmed.startsWith("</")) {
+      while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    }
+    lines.push(line);
+  }
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n");
+}
+
+function assistantText(message: OmpNativeAssistantMessage): string | null {
+  if (message.stopReason !== "stop" || !Array.isArray(message.content)) return null;
+  if (message.content.some((part: any) => part?.type === "toolCall" || part?.type === "tool_call")) return null;
+  return message.content
+    .flatMap((part: any) => part?.type === "text" && typeof part.text === "string" ? [part.text] : [])
+    .join("\n");
+}
+
+function matchOmpExactAssistantText(
+  expected: string,
+  assistantMessages: OmpNativeAssistantMessage[],
+  normalize: (value: string) => string,
+): OmpNativeAssistantMessage[] {
+  const matches: OmpNativeAssistantMessage[] = [];
+  for (const message of assistantMessages) {
+    const text = assistantText(message);
+    if (text === null) continue;
+    if (normalize(text) === expected) matches.push(message);
+  }
+  return matches;
+}
+
+function yieldCallersForMatchingData(
+  matches: Array<{ message: Record<string, any>; details: Record<string, any> }>,
+  assistantMessages: OmpNativeAssistantMessage[],
+): string[] | null {
+  if (matches.length !== 1) return matches.length === 0 ? [] : null;
+  const { message } = matches[0];
+  if (!isNativeId(message.toolCallId)) return null;
+  const callers = assistantMessages.filter((assistant) => Array.isArray(assistant.content) &&
+    assistant.content.some((part: any) =>
+      (part?.type === "toolCall" || part?.type === "tool_call") && part.name === "yield" && part.id === message.toolCallId,
+    ));
+  return callers.length === 1 && callers[0].responseId ? [callers[0].responseId] : null;
+}
+
+function matchingSuccessfulYieldResults(
+  assistantMessages: OmpNativeAssistantMessage[],
+  toolResults: Array<Record<string, any>>,
+  matchesData: (data: unknown) => boolean,
+): string[] | null {
+  const matches: Array<{ message: Record<string, any>; details: Record<string, any> }> = [];
+  for (const message of toolResults) {
+    const details = message.details;
+    if (message.toolName !== "yield" || !details || details.status !== "success" ||
+      details.data === undefined || details.data === null || !matchesData(details.data)) continue;
+    if (details.type !== undefined || details.useLastTurn === true || details.schemaOverridden === true) return null;
+    matches.push({ message, details });
+  }
+  return yieldCallersForMatchingData(matches, assistantMessages);
+}
+
+function hasUnsupportedSuccessfulYield(toolResults: Array<Record<string, any>>): boolean {
+  return toolResults.some((message) => {
+    const details = message.details;
+    return message.toolName === "yield" && details?.status === "success" &&
+      (details.type !== undefined || details.useLastTurn === true || details.schemaOverridden === true);
+  });
+}
+
+function readOmpFinalYieldResponseIds(
+  structured: Record<string, any>,
+  assistantMessages: OmpNativeAssistantMessage[],
+  toolResults: Array<Record<string, any>>,
+): string[] | null {
+  if (structured.status !== "valid" || !Object.hasOwn(structured, "data")) return [];
+  return matchingSuccessfulYieldResults(
+    assistantMessages,
+    toolResults,
+    (data) => isDeepStrictEqual(structured.data, data),
+  );
+}
+
+function readOmpRenderedYieldResponseIds(
+  output: string,
+  assistantMessages: OmpNativeAssistantMessage[],
+  toolResults: Array<Record<string, any>>,
+): string[] | null {
+  return matchingSuccessfulYieldResults(assistantMessages, toolResults, (data) => {
+    const rendered = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    return rendered !== undefined && formatOmpPlainTaskResultOutput(rendered) === output;
+  });
+}
+
+function readOmpTaskResultResponseIds(
+  job: { agentUrlId: string; resultText?: unknown; structured?: unknown },
+  assistantMessages: OmpNativeAssistantMessage[],
+  toolResults: Array<Record<string, any>>,
+  completedResponseIds: string[],
+): string[] {
+  // Qualify only source-reconstructable plain outputs and one untyped final yield;
+  // incremental/schema-normalized outputs and automatic deliveries remain unknown.
+  const completed = new Set(completedResponseIds);
+  const structured = job.structured;
+  if (structured !== undefined) {
+    if (!structured || typeof structured !== "object" || !Object.hasOwn(structured, "data")) return [];
+    return readOmpFinalYieldResponseIds(structured as Record<string, any>, assistantMessages, toolResults) ?? [];
+  }
+  if (typeof job.resultText !== "string") return [];
+  const output = taskResultOutputSlot(job.resultText, job.agentUrlId);
+  if (output !== null) {
+    // OMP switches to a preview at 5,000 characters when a full output artifact exists.
+    // Larger unmarked bodies may also be tail-truncated if artifact creation failed.
+    if (output.length > 5000) return [];
+    // Advanced yield modes can render a value that is not reconstructable from details.data.
+    if (hasUnsupportedSuccessfulYield(toolResults)) return [];
+    const plainMatches = matchOmpExactAssistantText(output, assistantMessages, formatOmpPlainTaskResultOutput);
+    const yieldMatches = readOmpRenderedYieldResponseIds(output, assistantMessages, toolResults);
+    if (yieldMatches === null) return [];
+    const candidates = [...plainMatches.map((message) => ({
+      responseId: message.responseId,
+      completed: message.responseId !== null && completed.has(message.responseId),
+    })), ...yieldMatches.map((responseId) => ({ responseId, completed: true }))];
+    return candidates.length === 1 && candidates[0].responseId && candidates[0].completed
+      ? [candidates[0].responseId]
+      : [];
+  } else {
+    if (job.resultText.startsWith("<task-result")) return [];
+    const matches = matchOmpExactAssistantText(job.resultText, assistantMessages, (text) => text.trim());
+    return matches.length === 1 && matches[0].responseId && completed.has(matches[0].responseId)
+      ? [matches[0].responseId]
+      : [];
+  }
 }
 
 export function pendingOmpCompactionDependencies(
@@ -544,11 +1238,11 @@ export function readOmpForkBoundaryIndex(branch: Array<Record<string, any>>, ses
   return index < 0 ? null : index;
 }
 
-function readOmpRunCompletions(
+function readOmpChildSessionEvidence(
   childSessionFile: string,
   parentSessionId: string,
   runId: string,
-): OmpTaskResultCompletion[] | null {
+): OmpChildSessionEvidence | null {
   const header = readNativeSessionHeader(childSessionFile);
   if (!header?.parentSession || readNativeSessionHeader(header.parentSession)?.id !== parentSessionId) return null;
   let fd: number | undefined;
@@ -562,11 +1256,25 @@ function readOmpRunCompletions(
     readSync(fd, buffer, 0, length, stat.size - length);
     if (length > 0 && buffer[length - 1] !== 0x0a) return null;
     const completions: OmpTaskResultCompletion[] = [];
-    const seen = new Set<string>();
+    const seenCompletions = new Set<string>();
+    const assistantMessages: OmpNativeAssistantMessage[] = [];
+    let latestAssistantResponseId: string | null = null;
+    const toolResults: Array<Record<string, any>> = [];
     for (const line of buffer.toString("utf8").split("\n")) {
       if (!line) continue;
-      let entry: { customType?: string; data?: Record<string, unknown> };
-      try { entry = JSON.parse(line) as typeof entry; } catch { return null; }
+      let entry: Record<string, any>;
+      try { entry = JSON.parse(line) as Record<string, any>; } catch { return null; }
+      const message = entry.message && typeof entry.message === "object" ? entry.message : entry;
+      if (message.role === "assistant") {
+        latestAssistantResponseId = isNativeId(message.responseId) ? message.responseId : null;
+        assistantMessages.push({
+          responseId: isNativeId(message.responseId) ? message.responseId : null,
+          stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,
+          content: Array.isArray(message.content) ? message.content : undefined,
+        });
+      } else if (message.role === "toolResult" || message.role === "tool_result") {
+        toolResults.push(message);
+      }
       if (entry.customType !== OMP_RUN_COMPLETION_ENTRY) continue;
       const data = entry.data;
       if (!data || data.version !== 1 || !isNativeId(data.runId) || !isNativeId(data.parentSessionId) ||
@@ -574,10 +1282,10 @@ function readOmpRunCompletions(
       if (data.runId !== runId || data.parentSessionId !== parentSessionId || data.sessionId !== header.id) continue;
       const completion = { sessionId: header.id, responseId: data.responseId, runId };
       const key = taskResultReferenceKey(completion);
-      if (!seen.has(key)) completions.push(completion);
-      seen.add(key);
+      if (!seenCompletions.has(key)) completions.push(completion);
+      seenCompletions.add(key);
     }
-    return completions;
+    return { sessionId: header.id, completions, assistantMessages, latestAssistantResponseId, toolResults };
   } catch {
     return null;
   } finally {
@@ -668,6 +1376,7 @@ export function deriveOmpIdentity(
   options: OmpCaptureContext,
   streamId?: string,
   dependencies: AgentMetadata["depends_on"] = [],
+  harnessVersion = "unknown",
 ): MetadataIdentity | null {
   const sessionId = options.sessionId;
   if (typeof sessionId !== "string" || !/^[A-Za-z0-9._:-]{1,256}$/.test(sessionId)) return null;
@@ -687,9 +1396,9 @@ export function deriveOmpIdentity(
   }
   return {
     harness: "omp",
-    harnessVersion: "18.12.6",
+    harnessVersion,
     extensionVersion: OMP_EXTENSION_VERSION,
-    runnerVersion: OMP_RUNNER_VERSION,
+    runnerVersion: harnessVersion,
     sessionId,
     rootSessionId: options.nativeRootSessionId !== undefined
       ? options.nativeRootSessionId
@@ -708,8 +1417,9 @@ export function createOmpEnvelope(
   options: OmpCaptureContext,
   streamId: string,
   dependencies: AgentMetadata["depends_on"] = [],
+  harnessVersion = "unknown",
 ): string | null {
-  const identity = deriveOmpIdentity(options, streamId, dependencies);
+  const identity = deriveOmpIdentity(options, streamId, dependencies, harnessVersion);
   if (!identity) return null;
   return encodeAgentMetadata(identity, streamId);
 }

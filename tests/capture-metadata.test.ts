@@ -1,21 +1,25 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
-import { findPiAiPackageRoot } from "../src/capture/pi-runtime.ts";
+import { findPiAiPackageRoot, loadPiCompactionRenderer } from "../src/capture/pi-runtime.ts";
 import {
   AGENT_HEADER_BUDGET,
   encodeAgentMetadata,
   parseAgentMetadata,
+  appendPendingChildLaunches,
+  packChildLaunches,
   claimFreshRequestMetadata,
   clearAgentMetadataHeader,
   recordFreshRequestMetadata,
   stripAgentMetadataHeader,
   type AgentMetadata,
+  type ChildLaunchReceipt,
   type MetadataIdentity,
 } from "../src/capture/shared.ts";
 import {
-  createPiEnvelopeForStream,
+  derivePiIdentity,
   isPiForkRoot,
   makePiCompactionRecord,
   PI_COMPACTION_ENTRY,
@@ -29,6 +33,14 @@ import {
   resolvePiSubagentRunnerRunId,
   resolveCompactionFrontier,
 } from "../src/capture/pi.ts";
+
+function piEnvelopeForTest(
+  ctx: Parameters<typeof derivePiIdentity>[0],
+  streamId: string,
+  input?: Parameters<typeof derivePiIdentity>[1],
+) {
+  return encodeAgentMetadata(derivePiIdentity(ctx, input), streamId);
+}
 import {
   createOmpEnvelope,
   createOmpSequenceState,
@@ -76,7 +88,7 @@ function piContext(overrides: Record<string, unknown> = {}) {
         overrides.parentSession ? nativeSessionFile(overrides.parentSession as string) : undefined,
       ),
       getHeader: () => ({ id: sessionId, parentSession: overrides.parentSession ? nativeSessionFile(overrides.parentSession as string) : undefined }),
-      getBranch: () => branch,
+      getBranch: () => branch.map((entry, index) => ({ id: `fixture-entry-${index}`, ...entry })),
     },
   } as any;
 }
@@ -108,6 +120,7 @@ describe("shared agent metadata", () => {
           toolCallId: metadata.delegation.tool_call_id,
         } : null,
         dependsOn: metadata.depends_on,
+        childLaunches: metadata.child_launches,
       };
       const encoded = encodeAgentMetadata(identity, metadata.stream_id);
       expect(encoded).not.toBeNull();
@@ -118,9 +131,20 @@ describe("shared agent metadata", () => {
     }
   });
 
+  test("rejects duplicate launch receipts in the envelope conformance contract", () => {
+    // Ensures duplicate edges cannot pass the runtime parser when the schema declares uniqueItems.
+    const document = JSON.parse(readFileSync(new URL("../conformance/agent-metadata-v1.json", import.meta.url), "utf8")) as {
+      fixtures: Array<{ metadata: AgentMetadata }>;
+    };
+    const fixture = document.fixtures.find(({ metadata }) => metadata.child_launches.length > 0)?.metadata;
+    expect(fixture).toBeDefined();
+    const duplicate = { ...fixture!, child_launches: [fixture!.child_launches[0], fixture!.child_launches[0]] };
+    expect(parseAgentMetadata(JSON.stringify(duplicate))).toBeNull();
+  });
+
   test("uses only fresh native request metadata and clears every reserved header spelling", () => {
     const cached = new Map<string, string>();
-    const encoded = createPiEnvelopeForStream(piContext(), "fresh-request-stream");
+    const encoded = piEnvelopeForTest(piContext(), "fresh-request-stream");
     expect(encoded).not.toBeNull();
     expect(recordFreshRequestMetadata(cached, encoded!)).toBe(true);
     const candidate = parseAgentMetadata(encoded)!;
@@ -162,6 +186,9 @@ describe("shared agent metadata", () => {
     expect(Buffer.byteLength(encoded!, "ascii")).toBeLessThanOrEqual(AGENT_HEADER_BUDGET);
     expect(encoded).toMatch(/^[\x20-\x7e]+$/);
     expect(parseAgentMetadata(encoded)?.session.id).toBe(`pi:session:${ids.root}`);
+    const withoutOptionalReceipts = JSON.parse(encoded!) as Record<string, unknown>;
+    delete withoutOptionalReceipts.child_launches;
+    expect(parseAgentMetadata(JSON.stringify(withoutOptionalReceipts))?.child_launches).toEqual([]);
   });
 
   test("preserves valid identity when dependencies exceed the header budget", () => {
@@ -206,6 +233,7 @@ describe("shared agent metadata", () => {
       sequence: { status: "linked", previous_response_id: ids.previous },
       delegation: { run_id: "delegated-run", tool_call_id: "tool-call" },
       depends_on: null,
+      child_launches: [],
     } satisfies AgentMetadata);
     expect(parseAgentMetadata(encoded)?.depends_on).toBeNull();
 
@@ -226,6 +254,149 @@ describe("shared agent metadata", () => {
     ]);
   });
 
+  test("packs joint dependency and launch receipt bytes deterministically across requests", () => {
+    // Ensures receipt packing uses one byte budget and leaves later requests able to drain leftovers.
+    const identity: MetadataIdentity = {
+      harness: "pi",
+      harnessVersion: "1.4.0",
+      extensionVersion: "1.1.0-dev",
+      runnerVersion: "0.83.0",
+      sessionId: ids.root,
+      rootSessionId: ids.root,
+      parentSessionId: null,
+      previousResponseId: null,
+      hasPriorHistory: false,
+      delegation: null,
+      dependsOn: Array.from({ length: 8 }, (_, index) => ({
+        session_id: `child-session-${index}-${"s".repeat(150)}`,
+        response_id: `child-response-${index}-${"r".repeat(150)}`,
+      })),
+    };
+    const receipts: ChildLaunchReceipt[] = Array.from({ length: 9 }, (_, index) => ({
+      parent_response_id: `parent-response-${index}-${"p".repeat(90)}`,
+      tool_call_id: `tool-call-${index}-${"t".repeat(90)}`,
+      child_session_id: `child-session-${index}-${"c".repeat(90)}`,
+      run_id: `run-${index}-${"n".repeat(90)}`,
+      last_response_id: `child-terminal-${index}-${"z".repeat(90)}`,
+    }));
+
+    const first = packChildLaunches(identity, ids.stream, receipts);
+    expect(first.encoded).not.toBeNull();
+    expect(Buffer.byteLength(first.encoded!, "ascii")).toBeLessThanOrEqual(AGENT_HEADER_BUDGET);
+    expect(first.included.length).toBeGreaterThan(0);
+    expect(first.included.length).toBeLessThan(9);
+    expect(first.remaining).toEqual(receipts.slice(first.included.length));
+    expect(parseAgentMetadata(first.encoded)?.depends_on).toEqual(identity.dependsOn);
+    expect(parseAgentMetadata(first.encoded)?.child_launches).toEqual(first.included);
+    expect(packChildLaunches(identity, ids.stream, receipts).encoded).toBe(first.encoded);
+
+    let remaining = first.remaining;
+    let drainedCount = 0;
+    for (let index = 0; index < 9 && remaining.length > 0; index++) {
+      const drained = packChildLaunches(identity, `next-stream-${index}`, remaining);
+      expect(drained.encoded).not.toBeNull();
+      expect(drained.included.length).toBeGreaterThan(0);
+      expect(parseAgentMetadata(drained.encoded)?.child_launches).toEqual(drained.included);
+      drainedCount += drained.included.length;
+      remaining = drained.remaining;
+    }
+    expect(drainedCount).toBe(first.remaining.length);
+    expect(remaining).toEqual([]);
+  });
+
+  test("accepts the exact joint header boundary and retains a receipt that exceeds it by one byte", () => {
+    // Ensures the 4096-byte limit includes both relationship lists without truncating either.
+    const identity: MetadataIdentity = {
+      harness: "pi",
+      harnessVersion: "1.4.0",
+      extensionVersion: "1.1.0-dev",
+      sessionId: "r".repeat(225),
+      rootSessionId: "q".repeat(225),
+      parentSessionId: "p".repeat(225),
+      previousResponseId: "v".repeat(256),
+      hasPriorHistory: true,
+      delegation: { runId: "d".repeat(256), toolCallId: "t".repeat(256) },
+      dependsOn: [{
+        session_id: "s".repeat(256),
+        response_id: "a".repeat(256),
+        stream_id: "b".repeat(256),
+        run_id: "c".repeat(256),
+      }],
+    };
+    const receipt = (terminalLength: number): ChildLaunchReceipt => ({
+      parent_response_id: "x".repeat(200),
+      tool_call_id: "y".repeat(200),
+      child_session_id: "z".repeat(200),
+      run_id: "w".repeat(200),
+      last_response_id: "v".repeat(terminalLength),
+    });
+
+    const exact = packChildLaunches(identity, "s".repeat(256), [receipt(62)]);
+    expect(exact.included).toEqual([receipt(62)]);
+    expect(Buffer.byteLength(exact.encoded!, "ascii")).toBe(AGENT_HEADER_BUDGET);
+    expect(parseAgentMetadata(exact.encoded)?.depends_on).toEqual(identity.dependsOn);
+
+    const oneByteOver = packChildLaunches(identity, "s".repeat(256), [receipt(63)]);
+    expect(oneByteOver.included).toEqual([]);
+    expect(oneByteOver.remaining).toEqual([receipt(63)]);
+    expect(parseAgentMetadata(oneByteOver.encoded)?.depends_on).toEqual(identity.dependsOn);
+  });
+
+  test("accepts maximum-length native identifiers and diagnoses invalid receipts without blocking valid ones", () => {
+    // Ensures long but valid IDs remain intact and a malformed item does not starve later receipts.
+    const identity: MetadataIdentity = {
+      harness: "pi",
+      harnessVersion: "1.4.0",
+      extensionVersion: "1.1.0-dev",
+      sessionId: ids.root,
+      rootSessionId: ids.root,
+      parentSessionId: null,
+      previousResponseId: null,
+      hasPriorHistory: false,
+      delegation: null,
+      dependsOn: [],
+    };
+    const longId = "x".repeat(256);
+    const longReceipt: ChildLaunchReceipt = {
+      parent_response_id: longId,
+      tool_call_id: longId,
+      child_session_id: longId,
+      run_id: longId,
+      last_response_id: longId,
+    };
+    const malformed = { ...longReceipt, run_id: `${longId}x` } as ChildLaunchReceipt;
+    const valid = { ...longReceipt, run_id: "valid-run" };
+    const packed = packChildLaunches(identity, ids.stream, [malformed, valid]);
+    expect(packed.included).toEqual([valid]);
+    expect(packed.remaining).toEqual([]);
+    expect(packed.unencodableIndices).toEqual([0]);
+    expect(parseAgentMetadata(packed.encoded)?.child_launches).toEqual([valid]);
+  });
+
+  test("caps pending receipts without evicting accepted evidence", () => {
+    // Ensures capacity exhaustion leaves the existing queue intact and reports rejected additions.
+    const receipts: ChildLaunchReceipt[] = Array.from({ length: 65 }, (_, index) => ({
+      parent_response_id: `parent-response-${index}`,
+      tool_call_id: `tool-call-${index}`,
+      child_session_id: `child-session-${index}`,
+      run_id: `run-${index}`,
+      last_response_id: `child-terminal-${index}`,
+    }));
+    const accepted = appendPendingChildLaunches([], receipts.slice(0, 64));
+    expect(accepted.pending).toEqual(receipts.slice(0, 64));
+    expect(accepted.accepted).toEqual(receipts.slice(0, 64));
+    expect(accepted.overflow).toBe(0);
+
+    const overflow = appendPendingChildLaunches(accepted.pending, [receipts[64]]);
+    expect(overflow.pending).toEqual(receipts.slice(0, 64));
+    expect(overflow.accepted).toEqual([]);
+    expect(overflow.overflow).toBe(1);
+
+    const duplicate = appendPendingChildLaunches(accepted.pending, [receipts[0]]);
+    expect(duplicate.pending).toEqual(receipts.slice(0, 64));
+    expect(duplicate.overflow).toBe(0);
+  });
+
   test("does not replace a missing predecessor with a later visible assistant", () => {
     const encoded = encodeAgentMetadata({
       harness: "pi",
@@ -240,12 +411,12 @@ describe("shared agent metadata", () => {
       dependsOn: [],
     });
     expect(parseAgentMetadata(encoded)?.sequence).toEqual({ status: "unavailable", previous_response_id: null });
-    const idlessBarrier = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: [
+    const idlessBarrier = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: [
       { type: "message", message: { role: "assistant", responseId: ids.previous } },
       { type: "message", message: { role: "assistant" } },
     ] }), ids.stream));
     expect(idlessBarrier?.sequence).toEqual({ status: "unavailable", previous_response_id: null });
-    const duplicate = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: [
+    const duplicate = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: [
       { type: "message", message: { role: "assistant", responseId: ids.previous } },
       { type: "message", message: { role: "assistant", responseId: ids.previous } },
     ] }), ids.stream));
@@ -325,15 +496,15 @@ describe("shared agent metadata", () => {
       parentSession: ids.root,
       branch: [{ type: "message", message: { role: "assistant", responseId: ids.previous } }],
     });
-    const normal = parseAgentMetadata(createPiEnvelopeForStream(ctx, ids.stream));
+    const normal = parseAgentMetadata(piEnvelopeForTest(ctx, ids.stream));
     expect(normal?.session.parent_id).toBe(`pi:session:${ids.root}`);
     expect(normal?.session.root_id).toBe(`pi:session:${ids.root}`);
     expect(normal?.sequence).toEqual({ status: "linked", previous_response_id: ids.previous });
     expect(normal?.source.runner_version).toBeUndefined();
-    const runnerIdentified = parseAgentMetadata(createPiEnvelopeForStream(ctx, ids.stream, { runnerVersion: "0.83.0" }));
+    const runnerIdentified = parseAgentMetadata(piEnvelopeForTest(ctx, ids.stream, { runnerVersion: "0.83.0" }));
     expect(runnerIdentified?.source.runner_version).toBe("0.83.0");
 
-    const fork = parseAgentMetadata(createPiEnvelopeForStream(ctx, ids.stream, { forkedRoot: true }));
+    const fork = parseAgentMetadata(piEnvelopeForTest(ctx, ids.stream, { forkedRoot: true }));
     expect(fork?.session.parent_id).toBeNull();
     expect(fork?.session.root_id).toBe(`pi:session:${ids.child}`);
     expect(fork?.sequence).toEqual({ status: "start", previous_response_id: null });
@@ -355,7 +526,7 @@ describe("shared agent metadata", () => {
     ];
     const first = piContext({ sessionId: ids.child, parentSession: ids.root, branch: [...inherited, marker] });
     expect(readPiForkBoundaryIndex(first)).toBe(inherited.length);
-    let metadata = parseAgentMetadata(createPiEnvelopeForStream(first, ids.stream));
+    let metadata = parseAgentMetadata(piEnvelopeForTest(first, ids.stream));
     expect(metadata?.sequence).toEqual({ status: "start", previous_response_id: null });
     expect(metadata?.depends_on).toEqual([]);
     const afterResponse = piContext({ sessionId: ids.child, parentSession: ids.root, branch: [
@@ -363,7 +534,7 @@ describe("shared agent metadata", () => {
       marker,
       { type: "message", message: { role: "assistant", responseId: "fork-response-1" } },
     ] });
-    metadata = parseAgentMetadata(createPiEnvelopeForStream(afterResponse, ids.stream));
+    metadata = parseAgentMetadata(piEnvelopeForTest(afterResponse, ids.stream));
     expect(metadata?.sequence).toEqual({ status: "linked", previous_response_id: "fork-response-1" });
     expect(metadata?.depends_on).toEqual([]);
     const pendingNewSummary = piContext({ sessionId: ids.child, parentSession: ids.root, branch: [
@@ -372,7 +543,7 @@ describe("shared agent metadata", () => {
       { type: "compaction", id: "fork-compaction" },
       { type: "custom", customType: PI_COMPACTION_ENTRY, data: makePiCompactionRecord("fork-compaction", ["fork-summary-stream"]) },
     ] });
-    metadata = parseAgentMetadata(createPiEnvelopeForStream(pendingNewSummary, ids.stream));
+    metadata = parseAgentMetadata(piEnvelopeForTest(pendingNewSummary, ids.stream));
     expect(metadata?.depends_on).toEqual([{ session_id: `pi:session:${ids.child}`, stream_id: "fork-summary-stream" }]);
   });
 
@@ -384,14 +555,14 @@ describe("shared agent metadata", () => {
         data: makePiCompactionRecord("9aabe536", [ids.stream]),
       }],
     });
-    const metadata = parseAgentMetadata(createPiEnvelopeForStream(good, "200de1b9-d205-4792-97e7-1896fd343573"));
+    const metadata = parseAgentMetadata(piEnvelopeForTest(good, "200de1b9-d205-4792-97e7-1896fd343573"));
     expect(metadata?.depends_on).toEqual([{ session_id: `pi:session:${ids.root}`, stream_id: ids.stream }]);
     const consumed = piContext({ branch: [
       { type: "compaction", id: "9aabe536" },
       { type: "custom", customType: PI_COMPACTION_ENTRY, data: makePiCompactionRecord("9aabe536", [ids.stream]) },
       { type: "message", message: { role: "assistant", responseId: "summary-consumer" } },
     ] });
-    expect(parseAgentMetadata(createPiEnvelopeForStream(consumed, ids.stream))?.depends_on).toEqual([]);
+    expect(parseAgentMetadata(piEnvelopeForTest(consumed, ids.stream))?.depends_on).toEqual([]);
     expect(readLatestPiCompactionContributors(consumed)).toEqual([]);
 
     const ambiguous = piContext({
@@ -401,7 +572,7 @@ describe("shared agent metadata", () => {
         data: makePiCompactionRecord("9aabe536", [], false),
       }],
     });
-    expect(parseAgentMetadata(createPiEnvelopeForStream(ambiguous, ids.stream))?.depends_on).toBeNull();
+    expect(parseAgentMetadata(piEnvelopeForTest(ambiguous, ids.stream))?.depends_on).toBeNull();
 
     const staleRecord = piContext({ branch: [
       { type: "compaction", id: "first-native-compaction" },
@@ -428,30 +599,37 @@ describe("shared agent metadata", () => {
       { type: "compaction", id: c1 },
       { type: "custom", customType: PI_COMPACTION_ENTRY, data: makePiCompactionRecord(c1, historical) },
     ];
-    const firstConsumer = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: branch1 }), "consumer-one"));
+    const firstConsumer = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: branch1 }), "consumer-one"));
     expect(firstConsumer?.depends_on).toEqual(historical.map((stream_id) => ({ session_id: `pi:session:${ids.root}`, stream_id })));
 
-    const summary2First = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: branch1 }), "c2-summary-first"));
-    const summary2Last = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: branch1 }), "c2-summary-last", {
-      resultDependencies: [{ session_id: `pi:session:${ids.root}`, stream_id: "c2-summary-first" }],
-    }));
+    const summary2First = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: branch1 }), "c2-summary-first"));
+    const summary2FirstResponse = { type: "message", message: { role: "assistant", responseId: "c2-summary-first-response" } };
+    const summary2Last = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: [
+      ...branch1,
+      summary2FirstResponse,
+    ] }), "c2-summary-last"));
     const expectedC2Inputs = [
       ...historical,
-      "c2-summary-first",
     ].map((stream_id) => ({ session_id: `pi:session:${ids.root}`, stream_id }));
-    expect(summary2First?.depends_on).toEqual(expectedC2Inputs.slice(0, 2));
-    expect(summary2Last?.depends_on).toEqual(expectedC2Inputs);
+    expect(summary2First?.depends_on).toEqual(expectedC2Inputs);
+    expect(summary2Last?.depends_on).toEqual([]);
+    expect(summary2Last?.sequence).toEqual({ status: "linked", previous_response_id: "c2-summary-first-response" });
     expect(Buffer.byteLength(JSON.stringify(summary2Last), "ascii")).toBeLessThanOrEqual(AGENT_HEADER_BUDGET);
 
     const branch2 = [
       ...branch1,
+      summary2FirstResponse,
+      { type: "message", message: { role: "assistant", responseId: "c2-summary-last-response" } },
       { type: "message", message: { role: "assistant", responseId: "consumer-one-response" } },
       { type: "compaction", id: c2 },
-      { type: "custom", customType: PI_COMPACTION_ENTRY, data: makePiCompactionRecord(c2, ["c2-summary-last"]) },
+      { type: "custom", customType: PI_COMPACTION_ENTRY, data: makePiCompactionRecord(c2, ["c2-summary-first", "c2-summary-last"]) },
     ];
-    const firstAfterC2 = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: branch2 }), "consumer-two"));
-    expect(firstAfterC2?.depends_on).toEqual([{ session_id: `pi:session:${ids.root}`, stream_id: "c2-summary-last" }]);
-    const laterAfterC2 = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: [
+    const firstAfterC2 = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: branch2 }), "consumer-two"));
+    expect(firstAfterC2?.depends_on).toEqual([
+      { session_id: `pi:session:${ids.root}`, stream_id: "c2-summary-first" },
+      { session_id: `pi:session:${ids.root}`, stream_id: "c2-summary-last" },
+    ]);
+    const laterAfterC2 = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: [
       ...branch2,
       { type: "message", message: { role: "assistant", responseId: "consumer-two-response" } },
     ] }), "later-two"));
@@ -461,38 +639,58 @@ describe("shared agent metadata", () => {
       ...branch2,
       { type: "message", message: { role: "assistant", responseId: "consumer-two-response" } },
     ];
-    const summary3First = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: branch3Input }), "c3-summary-first"));
-    const summary3Last = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: branch3Input }), "c3-summary-last", {
-      resultDependencies: [{ session_id: `pi:session:${ids.root}`, stream_id: "c3-summary-first" }],
-    }));
+    const summary3First = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: branch3Input }), "c3-summary-first"));
+    const summary3FirstResponse = { type: "message", message: { role: "assistant", responseId: "c3-summary-first-response" } };
+    const summary3Last = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: [
+      ...branch3Input,
+      summary3FirstResponse,
+    ] }), "c3-summary-last"));
     expect(summary3First?.depends_on).toEqual([]);
     expect(summary3First?.sequence).toEqual({ status: "linked", previous_response_id: "consumer-two-response" });
-    expect(summary3Last?.depends_on).toEqual([{ session_id: `pi:session:${ids.root}`, stream_id: "c3-summary-first" }]);
+    expect(summary3Last?.depends_on).toEqual([]);
+    expect(summary3Last?.sequence).toEqual({ status: "linked", previous_response_id: "c3-summary-first-response" });
     const branch3 = [
       ...branch3Input,
+      summary3FirstResponse,
+      { type: "message", message: { role: "assistant", responseId: "c3-summary-last-response" } },
       { type: "compaction", id: c3 },
-      { type: "custom", customType: PI_COMPACTION_ENTRY, data: makePiCompactionRecord(c3, ["c3-summary-last"]) },
+      { type: "custom", customType: PI_COMPACTION_ENTRY, data: makePiCompactionRecord(c3, ["c3-summary-first", "c3-summary-last"]) },
     ];
-    const firstAfterC3 = parseAgentMetadata(createPiEnvelopeForStream(piContext({ branch: branch3 }), "consumer-three"));
-    expect(firstAfterC3?.depends_on).toEqual([{ session_id: `pi:session:${ids.root}`, stream_id: "c3-summary-last" }]);
+    const firstAfterC3 = parseAgentMetadata(piEnvelopeForTest(piContext({ branch: branch3 }), "consumer-three"));
+    expect(firstAfterC3?.depends_on).toEqual([
+      { session_id: `pi:session:${ids.root}`, stream_id: "c3-summary-first" },
+      { session_id: `pi:session:${ids.root}`, stream_id: "c3-summary-last" },
+    ]);
     expect(Buffer.byteLength(JSON.stringify(firstAfterC3), "ascii")).toBeLessThanOrEqual(AGENT_HEADER_BUDGET);
 
-    const edges = new Map<string, string[]>([
-      ["c2-summary-first", historical],
-      ["c2-summary-last", [...historical, "c2-summary-first"]],
-      ["consumer-two", ["c2-summary-last"]],
-      ["c3-summary-first", ["consumer-two"]],
-      ["c3-summary-last", ["consumer-two", "c3-summary-first"]],
-      ["consumer-three", ["c3-summary-last"]],
+    const emitted = [summary2First, summary2Last, firstAfterC2, summary3First, summary3Last, firstAfterC3];
+    const streamByResponse = new Map([
+      ["consumer-two-response", firstAfterC2?.stream_id],
+      ["c2-summary-first-response", summary2First?.stream_id],
+      ["c2-summary-last-response", summary2Last?.stream_id],
+      ["c3-summary-first-response", summary3First?.stream_id],
+      ["c3-summary-last-response", summary3Last?.stream_id],
     ]);
+    const edges = new Map<string, string[]>();
+    for (const metadata of emitted) {
+      const streamId = metadata?.stream_id;
+      if (typeof streamId !== "string") continue;
+      const parents = (metadata.depends_on ?? []).flatMap((dependency) => dependency.stream_id ? [dependency.stream_id] : []);
+      const sequenceParent = metadata.sequence.previous_response_id
+        ? streamByResponse.get(metadata.sequence.previous_response_id)
+        : undefined;
+      if (sequenceParent) parents.push(sequenceParent);
+      edges.set(streamId, parents);
+    }
     const reachable = new Set<string>();
     const visit = (streamId: string) => {
       if (reachable.has(streamId)) return;
       reachable.add(streamId);
       for (const parent of edges.get(streamId) ?? []) visit(parent);
     };
-    visit("consumer-three");
-    for (const streamId of [...historical, "c2-summary-first", "c2-summary-last", "consumer-two", "c3-summary-first", "c3-summary-last"]) {
+    visit(firstAfterC3!.stream_id);
+    for (const streamId of [...historical, summary2First!.stream_id, summary2Last!.stream_id,
+      firstAfterC2!.stream_id, summary3First!.stream_id, summary3Last!.stream_id]) {
       expect(reachable.has(streamId)).toBe(true);
     }
   });
@@ -690,18 +888,87 @@ describe("shared agent metadata", () => {
     }
   });
 
-  test("locates Pi AI from the actual nested host installation layout", () => {
+  test("prefers a host-local Pi AI package over its hoisted sibling", () => {
     const root = mkdtempSync(join(tmpdir(), "tokenvisor-pi-runtime-test-"));
     try {
       const host = join(root, "node_modules", "@earendil-works", "pi-coding-agent");
       const executable = join(host, "dist", "bundle", "cli.js");
       const piAi = join(host, "node_modules", "@earendil-works", "pi-ai");
+      const hoistedPiAi = join(root, "node_modules", "@earendil-works", "pi-ai");
       mkdirSync(join(host, "dist", "bundle"), { recursive: true });
       mkdirSync(piAi, { recursive: true });
+      mkdirSync(hoistedPiAi, { recursive: true });
       writeFileSync(join(host, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent" }));
       writeFileSync(executable, "");
-      writeFileSync(join(piAi, "package.json"), JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.4.0" }));
+      const manifest = {
+        name: "@earendil-works/pi-ai",
+        version: "1.4.0",
+        type: "module",
+        exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" } },
+      };
+      writeFileSync(join(piAi, "package.json"), JSON.stringify(manifest));
+      writeFileSync(join(hoistedPiAi, "package.json"), JSON.stringify(manifest));
       expect(findPiAiPackageRoot(executable)).toBe(piAi);
+      writeFileSync(join(piAi, "package.json"), JSON.stringify({ ...manifest, version: "1.3.9" }));
+      expect(findPiAiPackageRoot(executable)).toBe(piAi);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("locates the normal hoisted Pi AI peer and rejects an unrelated package at that name", () => {
+    const root = mkdtempSync(join(tmpdir(), "tokenvisor-pi-hoisted-runtime-test-"));
+    try {
+      const host = join(root, "node_modules", "@earendil-works", "pi-coding-agent");
+      const executable = join(host, "dist", "bundle", "cli.js");
+      const hoistedPiAi = join(root, "node_modules", "@earendil-works", "pi-ai");
+      mkdirSync(join(host, "dist", "bundle"), { recursive: true });
+      mkdirSync(hoistedPiAi, { recursive: true });
+      writeFileSync(join(host, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "1.4.0" }));
+      writeFileSync(executable, "");
+      writeFileSync(join(hoistedPiAi, "package.json"), JSON.stringify({
+        name: "@earendil-works/pi-ai",
+        version: "1.4.0",
+        type: "module",
+        exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" } },
+      }));
+      expect(findPiAiPackageRoot(executable)).toBe(hoistedPiAi);
+
+      writeFileSync(join(hoistedPiAi, "package.json"), JSON.stringify({ name: "unrelated-package", version: "1.4.0" }));
+      expect(findPiAiPackageRoot(executable)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("loads the pinned compaction renderer from its host in a hoisted import-only layout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tokenvisor-pi-hoisted-renderer-test-"));
+    try {
+      const host = join(root, "node_modules", "@earendil-works", "pi-coding-agent");
+      const executable = join(host, "dist", "bundle", "cli.js");
+      const hoistedPiAi = join(root, "node_modules", "@earendil-works", "pi-ai");
+      mkdirSync(join(host, "dist", "bundle"), { recursive: true });
+      mkdirSync(hoistedPiAi, { recursive: true });
+      writeFileSync(join(host, "package.json"), JSON.stringify({
+        name: "@earendil-works/pi-coding-agent", version: "1.4.0", type: "module",
+      }));
+      writeFileSync(executable, "");
+      writeFileSync(join(host, "dist", "index.js"), [
+        "export const convertToLlm = (messages) => messages;",
+        "export const serializeConversation = (messages) => JSON.stringify(messages);",
+        "export const sessionEntryToContextMessages = (entry) => [entry];",
+      ].join("\n"));
+      writeFileSync(join(hoistedPiAi, "package.json"), JSON.stringify({
+        name: "@earendil-works/pi-ai",
+        version: "1.4.0",
+        type: "module",
+        exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" } },
+      }));
+
+      const renderer = await loadPiCompactionRenderer(executable);
+      expect(renderer?.serializeConversation([{ role: "user" }])).toBe('[{"role":"user"}]');
+      expect(renderer?.convertToLlm([{ role: "assistant" }])).toEqual([{ role: "assistant" }]);
+      expect(renderer?.sessionEntryToContextMessages({ id: "entry" })).toEqual([{ id: "entry" }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -720,6 +987,10 @@ describe("shared agent metadata", () => {
       ].join("\n"));
       writeFileSync(childFile, [
         JSON.stringify({ type: "session", id: ids.child, parentSession: parentFile }),
+        JSON.stringify({ type: "message", id: "child-response-entry", message: {
+          role: "assistant", responseId: ids.previous, stopReason: "stop",
+          content: [{ type: "text", text: "child result" }],
+        } }),
         JSON.stringify({ type: "custom", customType: "tokenvisor-agent-run-completion-v1", data: {
           runId: "run-42", sessionId: ids.child, responseId: ids.previous,
         } }),
@@ -746,15 +1017,95 @@ describe("shared agent metadata", () => {
       const notice = {
         type: "custom_message",
         customType: "subagent-notify",
-        details: { runs: [{ runId: "run-42", status: "completed" }] },
+        details: { runs: [{
+          runId: "run-42", status: "completed", agent: "worker",
+          asyncDir: join(root, "async-subagent-runs", "run-42"),
+          sessionLabel: "Session file", sessionValue: childFile,
+        }] },
+        content: `Background task completed: **worker**\n\nworker:\nchild result\n\nRetention-managed async directory: ${join(root, "async-subagent-runs", "run-42")}\n\nSession file: ${childFile}\n\nParent action: call-42`,
       };
       const launch = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "subagent", id: "call-42" }] } };
-      const fresh = piContext({ branch: [launch, notice], sessionFile: parentFile });
+      const nativeResult = { type: "message", message: { role: "toolResult", toolCallId: "call-42", details: { runId: "run-42" } } };
+      const fresh = piContext({ branch: [launch, nativeResult, notice], sessionFile: parentFile });
       expect(readPiUnconsumedRunDependencies(fresh)).toEqual([{
         session_id: `pi:session:${ids.child}`,
         response_id: ids.previous,
         run_id: "run-42",
       }]);
+      // Pinned 0.83.0 strips the child's trailing whitespace before formatSingleCompletion;
+      // the renderer then adds framing newlines while preserving output-leading newlines.
+      for (const leading of ["", "\n", "\n\n"]) {
+        for (const trailing of ["", "\n", "\n\n"]) {
+          const rawOutput = `${leading}child result${trailing}`;
+          const renderedOutput = rawOutput.trimEnd();
+          writeFileSync(childFile, [
+            JSON.stringify({ type: "session", id: ids.child, parentSession: parentFile }),
+            JSON.stringify({ type: "message", id: "child-response-entry", message: {
+              role: "assistant", responseId: ids.previous, stopReason: "stop",
+              content: [{ type: "text", text: rawOutput }],
+            } }),
+            JSON.stringify({ type: "custom", customType: "tokenvisor-agent-run-completion-v1", data: {
+              runId: "run-42", sessionId: ids.child, responseId: ids.previous,
+            } }),
+          ].join("\n") + "\n");
+          const renderedNotice = {
+            ...notice,
+            content: `Background task completed: **worker**\n\nworker:\n${renderedOutput}\n\nRetention-managed async directory: ${join(root, "async-subagent-runs", "run-42")}\n\nSession file: ${childFile}\n\nParent action: call-42`,
+          };
+          expect(readPiUnconsumedRunDependencies(piContext({
+            branch: [launch, nativeResult, renderedNotice],
+            sessionFile: parentFile,
+          }))).toEqual([{
+            session_id: `pi:session:${ids.child}`,
+            response_id: ids.previous,
+            run_id: "run-42",
+          }]);
+        }
+      }
+      const literalNoOutputNotice = {
+        ...notice,
+        content: `Background task completed: **worker**\n\nworker:\n(no output)\n\nRetention-managed async directory: ${join(root, "async-subagent-runs", "run-42")}\n\nSession file: ${childFile}\n\nParent action: call-42`,
+      };
+      writeFileSync(childFile, [
+        JSON.stringify({ type: "session", id: ids.child, parentSession: parentFile }),
+        JSON.stringify({ type: "message", id: "child-response-entry", message: {
+          role: "assistant", responseId: ids.previous, stopReason: "stop",
+          content: [{ type: "text", text: "(no output)" }],
+        } }),
+        JSON.stringify({ type: "custom", customType: "tokenvisor-agent-run-completion-v1", data: {
+          runId: "run-42", sessionId: ids.child, responseId: ids.previous,
+        } }),
+      ].join("\n") + "\n");
+      expect(readPiUnconsumedRunDependencies(piContext({
+        branch: [launch, nativeResult, literalNoOutputNotice],
+        sessionFile: parentFile,
+      }))).toEqual([{
+        session_id: `pi:session:${ids.child}`,
+        response_id: ids.previous,
+        run_id: "run-42",
+      }]);
+      writeFileSync(childFile, [
+        JSON.stringify({ type: "session", id: ids.child, parentSession: parentFile }),
+        JSON.stringify({ type: "custom", customType: "tokenvisor-agent-run-completion-v1", data: {
+          runId: "run-42", sessionId: ids.child, responseId: ids.previous,
+        } }),
+      ].join("\n") + "\n");
+      expect(readPiUnconsumedRunDependencies(piContext({
+        branch: [launch, nativeResult, literalNoOutputNotice],
+        sessionFile: parentFile,
+      }))).toBeNull();
+      writeFileSync(childFile, [
+        JSON.stringify({ type: "session", id: ids.child, parentSession: parentFile }),
+        JSON.stringify({ type: "message", id: "child-response-entry", message: {
+          role: "assistant", responseId: ids.previous, stopReason: "stop",
+          content: [{ type: "text", text: "child result" }],
+        } }),
+        JSON.stringify({ type: "custom", customType: "tokenvisor-agent-run-completion-v1", data: {
+          runId: "run-42", sessionId: ids.child, responseId: ids.previous,
+        } }),
+      ].join("\n") + "\n");
+      const mismatchedOutput = { ...notice, content: notice.content.replace("child result", "different result") };
+      expect(readPiUnconsumedRunDependencies(piContext({ branch: [launch, nativeResult, mismatchedOutput], sessionFile: parentFile }))).toBeNull();
       writeFileSync(statusPath, JSON.stringify({ ...status, sessionId: ids.root }));
       expect(readPiUnconsumedRunDependencies(fresh)).toEqual([{
         session_id: `pi:session:${ids.child}`,
@@ -764,12 +1115,15 @@ describe("shared agent metadata", () => {
       writeFileSync(statusPath, JSON.stringify({ ...status, sessionId: "unrelated-parent-id" }));
       expect(readPiUnconsumedRunDependencies(fresh)).toBeNull();
       writeFileSync(statusPath, JSON.stringify(status));
-      const consumed = piContext({ branch: [launch, notice, { type: "message", message: { role: "assistant", responseId: "parent-consumer" } }], sessionFile: parentFile });
+      const consumed = piContext({ branch: [launch, nativeResult, notice, { type: "message", message: { role: "assistant", responseId: "parent-consumer" } }], sessionFile: parentFile });
       expect(readPiUnconsumedRunDependencies(consumed)).toEqual([]);
-      const summarized = piContext({ branch: [launch, notice, { type: "compaction", id: "compact-1" }, {
+      const summarized = piContext({ branch: [launch, nativeResult, notice, { type: "compaction", id: "compact-1", firstKeptEntryId: "compact-1", fromHook: false }, {
         type: "custom",
         customType: PI_COMPACTION_ENTRY,
-        data: { ...makePiCompactionRecord("compact-1", [ids.stream]), consumedRunIds: ["run-42"] },
+        data: {
+          ...makePiCompactionRecord("compact-1", [ids.stream]),
+          consumedDependencies: [{ session_id: `pi:session:${ids.child}`, response_id: ids.previous, run_id: "run-42" }],
+        },
       }], sessionFile: parentFile });
       expect(readPiUnconsumedRunDependencies(summarized)).toEqual([]);
     } finally {
@@ -780,11 +1134,13 @@ describe("shared agent metadata", () => {
   });
 
   test("does not treat OMP cache-affinity parentSessionId as native ancestry", () => {
-    const identity = deriveOmpIdentity({ sessionId: ids.root, parentSessionId: ids.child, messages: [] });
+    const identity = deriveOmpIdentity({ sessionId: ids.root, parentSessionId: ids.child, messages: [] }, ids.stream, [], "18.12.7");
     expect(identity?.rootSessionId).toBeNull();
     expect(identity?.parentSessionId).toBeNull();
-    const encoded = createOmpEnvelope({ sessionId: ids.root, parentSessionId: ids.child, messages: [] }, ids.stream);
+    expect(identity?.harnessVersion).toBe("18.12.7");
+    const encoded = createOmpEnvelope({ sessionId: ids.root, parentSessionId: ids.child, messages: [] }, ids.stream, [], "18.12.7");
     expect(parseAgentMetadata(encoded)?.session.parent_id).toBeNull();
+    expect(parseAgentMetadata(encoded)?.source.harness_version).toBe("18.12.7");
     const duplicate = parseAgentMetadata(createOmpEnvelope({ sessionId: ids.root, messages: [
       { role: "assistant", responseId: ids.previous },
       { role: "assistant", responseId: ids.previous },
@@ -992,7 +1348,7 @@ describe("shared agent metadata", () => {
       JSON.stringify({ type: "message", message: {
         role: "toolResult",
         toolCallId: "omp-task-call-1",
-        details: { progress: [{ id: agentId, status: "completed" }] },
+        details: { progress: [{ id: agentId, status: "completed" }, { id: "BatchPeer", status: "running" }] },
       } }),
     ].join("\n"));
     expect(deriveOmpSessionLineage(ids.child, parentFile, false, childFile)).toEqual({
@@ -1001,6 +1357,10 @@ describe("shared agent metadata", () => {
     });
     expect(readOmpTaskDelegation(parentFile, ids.root, agentId)).toEqual({
       runId: `omp:task:${agentId}`,
+      toolCallId: "omp-task-call-1",
+    });
+    expect(readOmpTaskDelegation(parentFile, ids.root, "BatchPeer")).toEqual({
+      runId: "omp:task:BatchPeer",
       toolCallId: "omp-task-call-1",
     });
     expect(readOmpTaskDelegation(parentFile, ids.root, "UnrelatedTask")).toBeNull();
@@ -1024,10 +1384,18 @@ describe("shared agent metadata", () => {
     const childFile = join(nativeFixtureRoot, rootSessionId, `${stableAgentId}.jsonl`);
     mkdirSync(dirname(childFile), { recursive: true });
     writeFileSync(parentFile, `${JSON.stringify({ type: "session", id: rootSessionId })}\n`);
-    const writeChildPrefix = (entries: Array<Record<string, any>>) => {
-      const nativeEntries = entries.map((entry) => entry.type === "session"
-        ? { ...entry, parentSession: parentFile }
-        : entry);
+    const writeChildPrefix = (
+      entries: Array<Record<string, any>>,
+      responseTextById: Record<string, string> = {},
+    ) => {
+      const nativeEntries = entries.map((entry) => {
+        if (entry.type === "session") return { ...entry, parentSession: parentFile };
+        const message = entry.message;
+        const responseText = message?.role === "assistant" ? responseTextById[message.responseId] : undefined;
+        return responseText === undefined
+          ? entry
+          : { ...entry, message: { ...message, content: [{ type: "text", text: responseText }] } };
+      });
       writeFileSync(childFile, `${nativeEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
     };
     const effectiveMessages = (branch: Array<Record<string, any>>) => branch.flatMap((entry) => {
@@ -1036,8 +1404,37 @@ describe("shared agent metadata", () => {
       return [];
     });
 
-    const firstBranch = firstSnapshot.nativeBranch as Array<Record<string, any>>;
+    const synthetic = human.syntheticQualification;
+    const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+    expect(synthetic.kind).toBe("source-backed-synthetic-payloads");
+    for (const witness of [synthetic.firstTask, synthetic.followupWake]) {
+      expect(sha256(witness.responseText)).toBe(witness.responseSha256);
+      expect(sha256(witness.resultText)).toBe(witness.resultTextSha256);
+    }
+    expect(firstSnapshot.candidateCompletion.responseId).toBe(human.completionMarkers[0].responseId);
+
+    const withSyntheticResult = (snapshot: any, resultText: string) => (snapshot.nativeBranch as Array<Record<string, any>>).map((entry) => {
+      const message = entry.message;
+      if (message?.role !== "toolResult" || message.toolName !== "wait") return entry;
+      return {
+        ...entry,
+        message: {
+          ...message,
+          details: {
+            ...message.details,
+            jobs: message.details.jobs.map((job: Record<string, unknown>) => ({ ...job, resultText })),
+          },
+        },
+      };
+    });
+    const historicalFirstBranch = firstSnapshot.nativeBranch as Array<Record<string, any>>;
     writeChildPrefix(firstSnapshot.nativeChildFilePrefix);
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, historicalFirstBranch, effectiveMessages(historicalFirstBranch))).toBeNull();
+
+    const firstBranch = withSyntheticResult(firstSnapshot, synthetic.firstTask.resultText);
+    writeChildPrefix(firstSnapshot.nativeChildFilePrefix, {
+      [firstSnapshot.candidateCompletion.responseId]: synthetic.firstTask.responseText,
+    });
     expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, [])).toBeNull();
     const duplicateDeliveryInput = effectiveMessages(firstBranch);
     expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, [
@@ -1048,13 +1445,13 @@ describe("shared agent metadata", () => {
     expect(first).toEqual({
       dependencies: [{
         session_id: `omp:session:${childSessionId}`,
-        response_id: firstSnapshot.expectedDependency.responseId,
-        run_id: firstSnapshot.expectedDependency.runId,
+        response_id: firstSnapshot.candidateCompletion.responseId,
+        run_id: firstSnapshot.candidateCompletion.runId,
       }],
       references: [{
         sessionId: childSessionId,
-        responseId: firstSnapshot.expectedDependency.responseId,
-        runId: firstSnapshot.expectedDependency.runId,
+        responseId: firstSnapshot.candidateCompletion.responseId,
+        runId: firstSnapshot.candidateCompletion.runId,
         deliveryId: "parent-entry-18",
         jobId: human.nativeFacts.waitJobs[0].id,
       }],
@@ -1090,7 +1487,7 @@ describe("shared agent metadata", () => {
       references: first!.references,
     });
 
-    const followupBranch = followupSnapshot.nativeBranch as Array<Record<string, any>>;
+    const followupBranch = withSyntheticResult(followupSnapshot, synthetic.followupWake.resultText);
     const consumerAIndex = followupBranch.findIndex((entry) => entry.id === firstConsumerEntry.id);
     expect(consumerAIndex).toBeGreaterThanOrEqual(0);
     const branchWithConsumedA = [
@@ -1098,18 +1495,21 @@ describe("shared agent metadata", () => {
       persistedFirst.at(-1)!,
       ...followupBranch.slice(consumerAIndex + 1),
     ];
-    writeChildPrefix(followupSnapshot.nativeChildFilePrefix);
+    writeChildPrefix(followupSnapshot.nativeChildFilePrefix, {
+      [firstSnapshot.candidateCompletion.responseId]: synthetic.firstTask.responseText,
+      [followupSnapshot.candidateCompletion.responseId]: synthetic.followupWake.responseText,
+    });
     const followup = readOmpTaskResultDependencies(parentFile, rootSessionId, branchWithConsumedA, effectiveMessages(branchWithConsumedA));
     expect(followup).toEqual({
       dependencies: [{
         session_id: `omp:session:${childSessionId}`,
-        response_id: followupSnapshot.expectedDependency.responseId,
-        run_id: followupSnapshot.expectedDependency.runId,
+        response_id: followupSnapshot.candidateCompletion.responseId,
+        run_id: followupSnapshot.candidateCompletion.runId,
       }],
       references: [{
         sessionId: childSessionId,
-        responseId: followupSnapshot.expectedDependency.responseId,
-        runId: followupSnapshot.expectedDependency.runId,
+        responseId: followupSnapshot.candidateCompletion.responseId,
+        runId: followupSnapshot.candidateCompletion.runId,
         deliveryId: "parent-entry-26",
         jobId: human.nativeFacts.waitJobs[1].id,
       }],
@@ -1135,7 +1535,10 @@ describe("shared agent metadata", () => {
 
     writeChildPrefix(firstSnapshot.nativeChildFilePrefix);
     expect(readOmpTaskResultDependencies(parentFile, rootSessionId, branchWithConsumedA, effectiveMessages(branchWithConsumedA))).toBeNull();
-    writeChildPrefix(followupSnapshot.nativeChildFilePrefix);
+    writeChildPrefix(followupSnapshot.nativeChildFilePrefix, {
+      [firstSnapshot.candidateCompletion.responseId]: synthetic.firstTask.responseText,
+      [followupSnapshot.candidateCompletion.responseId]: synthetic.followupWake.responseText,
+    });
 
     const statusOnlyBranch = followupBranch.map((entry) => {
       if (entry.id !== "parent-entry-26") return entry;
@@ -1198,7 +1601,7 @@ describe("shared agent metadata", () => {
     ], [{ session_id: `omp:session:${rootSessionId}`, stream_id: "pending-summary" }])).toEqual([]);
 
     expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, [])).toBeNull();
-    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, effectiveMessages(firstBranch))).toBeNull();
+    expect(readOmpTaskResultDependencies(parentFile, rootSessionId, firstBranch, effectiveMessages(firstBranch))).toEqual(first);
     const pendingBeforeCommit = new Map([["not-committed", first!.references]]);
     commitPendingOmpTaskResultConsumers(rootSessionId, firstBranch, pendingBeforeCommit, () => {}, () => firstBranch);
     expect(pendingBeforeCommit.size).toBe(1);
