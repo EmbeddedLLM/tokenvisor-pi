@@ -1451,7 +1451,6 @@ function readPiCompletionFromStatus(
 
 export function readPiUnconsumedRunDependencies(
   ctx: ExtensionContext,
-  onResolvedRun?: (runId: string) => void,
   onResolvedDependency?: (
     dependency: PiDependencyRef,
     deliveredText: string,
@@ -1537,7 +1536,6 @@ export function readPiUnconsumedRunDependencies(
         toolCallId: delivery.toolCallId,
         deliveredOutputSha256: delivery.deliveredOutputSha256,
       });
-      onResolvedRun?.(delivery.dependency.run_id ?? "");
       continue;
     }
     if (entry.type === "custom_message" && entry.customType === "subagent-incremental-child-notify") {
@@ -1574,8 +1572,6 @@ export function readPiUnconsumedRunDependencies(
     }
     if (inlineWorkflow) {
       if (inlineWorkflow.statusOnly) continue;
-      const workflowRunId = inlineWorkflow.workflowRunId;
-      let workflowResolved = true;
       for (const child of inlineWorkflow.children) {
         const output = isNativeId(child.childId) && isNativeId(child.runId)
           ? inlineWorkflow.outputs.get(`${child.childId}:${child.runId}`)
@@ -1584,7 +1580,6 @@ export function readPiUnconsumedRunDependencies(
             !isNativeId(child.runId) || output?.status !== child.state ||
             typeof output.output !== "string" && typeof output.preview !== "string") {
           unresolved = true;
-          workflowResolved = false;
           continue;
         }
         const completion = output.output !== undefined
@@ -1594,7 +1589,6 @@ export function readPiUnconsumedRunDependencies(
             : null;
         if (!completion) {
           unresolved = true;
-          workflowResolved = false;
           continue;
         }
         addDependency(
@@ -1606,7 +1600,6 @@ export function readPiUnconsumedRunDependencies(
           },
         );
       }
-      if (workflowResolved) onResolvedRun?.(workflowRunId);
       continue;
     }
     if (entry.type !== "custom_message") continue;
@@ -1638,7 +1631,6 @@ export function readPiUnconsumedRunDependencies(
         for (const dependency of workflowDelivery.dependencies) {
           addSubagentNoticeDependency(dependency, workflowDelivery.deliveryText);
         }
-        for (const consumedRunId of workflowDelivery.consumedRunIds) onResolvedRun?.(consumedRunId);
         continue;
       }
       if (run.workflowRunId === undefined) {
@@ -1663,7 +1655,6 @@ export function readPiUnconsumedRunDependencies(
         }
         if (resolved.kind === "empty") continue;
         addSubagentNoticeDependency(resolved.dependency, typeof entry.content === "string" ? entry.content : "");
-        onResolvedRun?.(resolved.runId);
         continue;
       }
       if (run.status !== "completed") {
@@ -1690,7 +1681,6 @@ export function readPiUnconsumedRunDependencies(
         run_id: completion.runId,
       };
       addDependency(dependency, typeof entry.content === "string" ? entry.content : "");
-      onResolvedRun?.(run.runId);
     }
   }
   const unique = [...new Map(dependencies

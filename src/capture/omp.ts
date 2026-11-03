@@ -57,7 +57,6 @@ export interface OmpCaptureContext {
   delegation?: MetadataIdentity["delegation"];
   nativeParentSessionId?: string;
   nativeRootSessionId?: string | null;
-  isKnownRoot?: boolean;
   isForkedRoot?: boolean;
   parentSessionId?: string;
   messages?: MessageLike[];
@@ -678,13 +677,6 @@ export function getOmpRuntimeCaptureState(): OmpRuntimeCaptureState {
     taskResultReferencesByStream: new Map(),
     earlyTaskBindings: new Map(),
   } satisfies OmpRuntimeCaptureState;
-  runtime[OMP_LINEAGE_STATE].sequenceBySession ??= new Map();
-  runtime[OMP_LINEAGE_STATE].pendingTaskResultConsumptions ??= new Map();
-  runtime[OMP_LINEAGE_STATE].pendingTaskBindingRetirements ??= new Map();
-  runtime[OMP_LINEAGE_STATE].appendEntryBySession ??= new Map();
-  runtime[OMP_LINEAGE_STATE].compactionTaskResultReferences ??= new Map();
-  runtime[OMP_LINEAGE_STATE].taskResultReferencesByStream ??= new Map();
-  runtime[OMP_LINEAGE_STATE].earlyTaskBindings ??= new Map();
   return runtime[OMP_LINEAGE_STATE] as OmpRuntimeCaptureState;
 }
 
@@ -871,15 +863,8 @@ export function readOmpBlockingTaskResultDependencies(
     if (message.role !== "toolResult" || message.toolName !== "task" ||
         !isNativeId(message.toolCallId) || !isNativeId(raw.id)) continue;
     const knownBindings = earlyTaskBindingsForToolCall(state, parentSessionId, message.toolCallId);
-    if (knownBindings.length === 0) continue;
     for (const known of knownBindings) {
       if (!bindingIds.includes(known.agentId)) bindingIds.push(known.agentId);
-    }
-    const callMatches = toolCalls.get(message.toolCallId) ?? [];
-    if (callMatches.length !== 1 || callMatches[0].name !== "task" || !callMatches[0].responseId ||
-        callMatches[0].index >= index) {
-      unavailable = true;
-      continue;
     }
     const effectiveMatches = effectiveMessages.filter((candidate) =>
       candidate.role === "toolResult" && candidate.toolName === "task" && candidate.toolCallId === message.toolCallId,
@@ -891,18 +876,28 @@ export function readOmpBlockingTaskResultDependencies(
     }
     if (!isDeepStrictEqual(effectiveMatches[0].content, message.content)) continue;
 
+    if (message.isError === true) continue;
     const results = Array.isArray(details?.results) ? details.results : [];
     if (results.length === 0) {
-      unavailable = true;
+      if (knownBindings.length > 0) unavailable = true;
       continue;
     }
-    if (message.isError === true) continue;
     const successfulResults = results.filter((result: any) =>
       result && result.exitCode === 0 && result.aborted !== true && result.error === undefined &&
       typeof result.output === "string" && result.output.length > 0,
     );
     if (successfulResults.length === 0) continue;
     if (consumed.deliveryIds.has(raw.id)) continue;
+    const callMatches = toolCalls.get(message.toolCallId) ?? [];
+    if (callMatches.length !== 1 || callMatches[0].name !== "task" || !callMatches[0].responseId ||
+        callMatches[0].index >= index) {
+      unavailable = true;
+      continue;
+    }
+    if (knownBindings.length === 0) {
+      unavailable = true;
+      continue;
+    }
     if (results.length !== 1 || knownBindings.length !== 1 || "conflict" in knownBindings[0]) {
       unavailable = true;
       continue;
@@ -1374,7 +1369,6 @@ function sameNativePath(left: string, right: string): boolean {
 
 export function deriveOmpIdentity(
   options: OmpCaptureContext,
-  streamId?: string,
   dependencies: AgentMetadata["depends_on"] = [],
   harnessVersion = "unknown",
 ): MetadataIdentity | null {
@@ -1400,11 +1394,7 @@ export function deriveOmpIdentity(
     extensionVersion: OMP_EXTENSION_VERSION,
     runnerVersion: harnessVersion,
     sessionId,
-    rootSessionId: options.nativeRootSessionId !== undefined
-      ? options.nativeRootSessionId
-      : options.isKnownRoot
-        ? sessionId
-        : null,
+    rootSessionId: options.nativeRootSessionId ?? null,
     parentSessionId: options.nativeParentSessionId ?? null,
     previousResponseId,
     hasPriorHistory,
@@ -1419,7 +1409,7 @@ export function createOmpEnvelope(
   dependencies: AgentMetadata["depends_on"] = [],
   harnessVersion = "unknown",
 ): string | null {
-  const identity = deriveOmpIdentity(options, streamId, dependencies, harnessVersion);
+  const identity = deriveOmpIdentity(options, dependencies, harnessVersion);
   if (!identity) return null;
   return encodeAgentMetadata(identity, streamId);
 }

@@ -7,6 +7,7 @@ import { commitPiResultConsumption, derivePiIdentity, filterPiDependenciesForReq
 import { encodeAgentMetadata, parseAgentMetadata } from "../src/capture/shared.ts";
 import { loadPiRequiredExtensionsApi } from "../src/capture/pi-runtime.ts";
 import tokenVisorProvider from "../extensions/tokenvisor-provider.ts";
+import { PI_AI_DELEGATE_SOURCE, resetPiAiDelegate } from "./helpers/pi-ai-delegate.ts";
 
 const roots: string[] = [];
 function piEnvelopeForTest(
@@ -19,12 +20,10 @@ function piEnvelopeForTest(
 const savedEnv = { ...process.env };
 const savedArgv = process.argv;
 afterEach(() => {
+  resetPiAiDelegate();
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
   process.argv = savedArgv;
-  delete (globalThis as any).__PI_TEST_STREAM_RESULT__;
-  delete (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__;
-  delete (globalThis as any).__PI_TEST_CAPTURED_CONTEXT__;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -338,7 +337,7 @@ async function setupProviderHookHarness(harnessVersion = "1.4.0", runnerVersion 
     }
   `);
   writeFileSync(join(ai, "package.json"), JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.4.0", type: "module" }));
-  writeFileSync(join(ai, "dist", "api", "openai-completions.js"), 'export function streamSimple(model, context, options) { globalThis.__PI_TEST_CAPTURED_OPTIONS__ = options; globalThis.__PI_TEST_CAPTURED_CONTEXT__ = context; return { result: () => Promise.resolve(globalThis.__PI_TEST_STREAM_RESULT__) }; }');
+  writeFileSync(join(ai, "dist", "api", "openai-completions.js"), PI_AI_DELEGATE_SOURCE);
   writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "pi-subagents", version: runnerVersion, type: "module", exports: { "./required-child-extensions": "./bundle/required-child-extensions.js" } }));
   const moduleFile = join(pkg, "bundle", "required-child-extensions.js");
   writeFileSync(moduleFile, 'export const calls = []; export function registerRequiredChildExtensions(input) { calls.push(input); return { dispose() { calls.push("disposed"); } }; }');
@@ -599,14 +598,7 @@ describe("Pi inherited history and workflow provenance", () => {
           f.writeSession(f.parentFile, "parent", branch);
           const headers = new Headers();
           hooks.get("before_provider_headers")!({ headers }, ctx);
-          const candidate = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
           const expected = expectedByBatch[batch - 1]!;
-          expect(candidate?.depends_on).toEqual(expected);
-          expect(candidate?.source).toMatchObject({
-            harness: "pi",
-            harness_version: "1.4.7",
-            runner_version: "0.84.0",
-          });
 
           const responseId = `foreground-committed-parent-response-${batch}`;
           (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
@@ -624,6 +616,11 @@ describe("Pi inherited history and workflow provenance", () => {
             (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers,
           ).get("x-tokenvisor-agent"));
           expect(delivered?.depends_on).toEqual(expected);
+          expect(delivered?.source).toMatchObject({
+            harness: "pi",
+            harness_version: "1.4.7",
+            runner_version: "0.84.0",
+          });
           branch.push({
             id: `${responseId}-entry`,
             type: "message",
@@ -695,13 +692,6 @@ describe("Pi inherited history and workflow provenance", () => {
 
         const continuationHeaders = new Headers();
         hooks.get("before_provider_headers")!({ headers: continuationHeaders }, ctx);
-        const continuationCandidate = parseAgentMetadata(
-          continuationHeaders.get("x-tokenvisor-agent"),
-        );
-        expect(continuationCandidate).toMatchObject({
-          session: { id: "pi:session:parent", root_id: "pi:session:parent" },
-          depends_on: [],
-        });
         const retainedNativeMessages = branch
           .slice(branch.indexOf(retainedBoundary), branch.indexOf(compactionEntry))
           .filter((entry) => entry.type === "message")
@@ -723,9 +713,13 @@ describe("Pi inherited history and workflow provenance", () => {
           { headers: continuationHeaders },
         ).result();
         await Promise.resolve();
-        expect(parseAgentMetadata(new Headers(
+        const continuationMetadata = parseAgentMetadata(new Headers(
           (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers,
-        ).get("x-tokenvisor-agent"))?.depends_on).toEqual([]);
+        ).get("x-tokenvisor-agent"));
+        expect(continuationMetadata).toMatchObject({
+          session: { id: "pi:session:parent", root_id: "pi:session:parent" },
+          depends_on: [],
+        });
       } finally {
         harness.cleanup();
       }
@@ -1160,13 +1154,13 @@ describe("Pi inherited history and workflow provenance", () => {
     expect(readPiPersistedConsumedDependencies(ctx, second.notice.id)).toEqual([]);
   });
 
-  test("keeps legacy runless direct receipts unknown when compaction prunes part of the consumer window", () => {
+  test("keeps runless direct receipts unknown when compaction prunes part of the consumer window", () => {
     const f = fixture();
     const branch: any[] = [];
-    const first = addDirectDelivery(f, branch, "legacy-group-first");
-    const second = addDirectDelivery(f, branch, "legacy-group-second");
-    const firstCall = branch.find((entry) => entry.id === "call-legacy-group-first")!;
-    const secondCallIndex = branch.findIndex((entry) => entry.id === "call-legacy-group-second");
+    const first = addDirectDelivery(f, branch, "runless-group-first");
+    const second = addDirectDelivery(f, branch, "runless-group-second");
+    const firstCall = branch.find((entry) => entry.id === "call-runless-group-first")!;
+    const secondCallIndex = branch.findIndex((entry) => entry.id === "call-runless-group-second");
     const secondCall = branch.splice(secondCallIndex, 1)[0]!;
     firstCall.message.content.push(...secondCall.message.content);
     f.writeSession(f.parentFile, "parent", branch);
@@ -1174,15 +1168,15 @@ describe("Pi inherited history and workflow provenance", () => {
     const dependencies = readPiUnconsumedRunDependencies(ctx)!;
     expect(dependencies).toHaveLength(2);
 
-    const responseId = "legacy-direct-group-partial-consumer-response";
-    branch.push({ type: "message", id: "legacy-direct-group-partial-consumer", message: {
+    const responseId = "runless-direct-group-partial-consumer-response";
+    branch.push({ type: "message", id: "runless-direct-group-partial-consumer", message: {
       role: "assistant", responseId, content: [{ type: "text", text: "Consumed one of two direct outputs." }],
     } });
     const runlessReference = {
       session_id: dependencies[0]!.session_id,
       response_id: dependencies[0]!.response_id,
     };
-    expect(commitPiResultConsumption(ctx, "legacy-direct-group-partial-consumer-stream", responseId, [runlessReference],
+    expect(commitPiResultConsumption(ctx, "runless-direct-group-partial-consumer-stream", responseId, [runlessReference],
       (customType, data) => branch.push({ type: "custom", customType, data }))).toBe(true);
 
     expect(readPiPersistedConsumedDependencies(ctx, second.notice.id)).toBeNull();
@@ -1197,7 +1191,6 @@ describe("Pi inherited history and workflow provenance", () => {
     const witnesses: Array<{ dependency: any; deliveredText: string }> = [];
     const dependencies = readPiUnconsumedRunDependencies(
       f.context("parent", f.parentFile, branch),
-      undefined,
       (dependency, deliveredText) => witnesses.push({ dependency, deliveredText }),
     );
     expect(dependencies).toEqual(workflow.children.map((child) => ({
@@ -1873,13 +1866,11 @@ describe("Pi inherited history and workflow provenance", () => {
       hooks.get("session_before_compact")!({ preparation: firstPreparation }, ctx);
       const firstHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: firstHeaders }, ctx);
-      const firstCandidate = parseAgentMetadata(firstHeaders.get("x-tokenvisor-agent"));
       const childDependencies = workflow.children.map((child) => ({
         session_id: `pi:session:${child.sessionId}`,
         response_id: child.responseId,
         run_id: child.runId,
       }));
-      expect(firstCandidate?.depends_on).toEqual(childDependencies);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "summary-expiry-first-response",
         stopReason: "stop",
@@ -1929,11 +1920,6 @@ describe("Pi inherited history and workflow provenance", () => {
       } }, ctx);
       const secondHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: secondHeaders }, ctx);
-      const secondCandidate = parseAgentMetadata(secondHeaders.get("x-tokenvisor-agent"));
-      expect(secondCandidate?.depends_on).toEqual([{
-        session_id: "pi:session:parent",
-        stream_id: firstMetadata?.stream_id,
-      }]);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "summary-expiry-second-response",
         stopReason: "stop",
@@ -1946,7 +1932,10 @@ describe("Pi inherited history and workflow provenance", () => {
       ).result();
       await Promise.resolve();
       const secondMetadata = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
-      expect(secondMetadata?.depends_on).toEqual(secondCandidate?.depends_on);
+      expect(secondMetadata?.depends_on).toEqual([{
+        session_id: "pi:session:parent",
+        stream_id: firstMetadata?.stream_id,
+      }]);
 
       const secondCompaction = {
         id: "summary-expiry-compaction-two",
@@ -1959,7 +1948,18 @@ describe("Pi inherited history and workflow provenance", () => {
       hooks.get("session_compact")!({ fromExtension: false }, ctx);
       const continuationHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: continuationHeaders }, ctx);
-      expect(parseAgentMetadata(continuationHeaders.get("x-tokenvisor-agent"))?.depends_on).toEqual([{
+      (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
+        responseId: "summary-expiry-continuation-response",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Continued after two summaries." }],
+      };
+      await providerConfig.streamSimple(
+        { id: "synthetic", api: "openai-completions", headers: continuationHeaders },
+        { messages: [{ role: "user", content: [{ type: "text", text: secondCompaction.summary }] }] },
+        { headers: continuationHeaders },
+      ).result();
+      const continuationMetadata = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
+      expect(continuationMetadata?.depends_on).toEqual([{
         session_id: "pi:session:parent",
         stream_id: secondMetadata?.stream_id,
       }]);
@@ -1984,13 +1984,11 @@ describe("Pi inherited history and workflow provenance", () => {
       } }, ctx);
       const summaryHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: summaryHeaders }, ctx);
-      const summaryCandidate = parseAgentMetadata(summaryHeaders.get("x-tokenvisor-agent"));
       const directDependency = {
         session_id: `pi:session:${delivery.sessionId}`,
         response_id: delivery.responseId,
         run_id: delivery.runId,
       };
-      expect(summaryCandidate?.depends_on).toEqual([directDependency]);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "direct-compaction-summary-response",
         stopReason: "stop",
@@ -2024,7 +2022,18 @@ describe("Pi inherited history and workflow provenance", () => {
       rmSync(delivery.sessionFile, { force: true });
       const continuationHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: continuationHeaders }, ctx);
-      expect(parseAgentMetadata(continuationHeaders.get("x-tokenvisor-agent"))?.depends_on).toEqual([{
+      (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
+        responseId: "direct-compaction-continuation-response",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Continued after direct summary." }],
+      };
+      await providerConfig.streamSimple(
+        { id: "synthetic", api: "openai-completions", headers: continuationHeaders },
+        { messages: [{ role: "user", content: [{ type: "text", text: nativeCompaction.summary }] }] },
+        { headers: continuationHeaders },
+      ).result();
+      const continuationMetadata = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
+      expect(continuationMetadata?.depends_on).toEqual([{
         session_id: "pi:session:parent",
         stream_id: summaryMetadata?.stream_id,
       }]);
@@ -2050,12 +2059,6 @@ describe("Pi inherited history and workflow provenance", () => {
       expect(api.calls[1]).toBe("disposed");
       const headers = new Headers();
       hooks.get("before_provider_headers")!({ headers }, ctx);
-      const candidate = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
-      expect(candidate?.depends_on).toEqual(workflow.children.map((child) => ({
-        session_id: `pi:session:${child.sessionId}`,
-        response_id: child.responseId,
-        run_id: child.runId,
-      })));
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = { responseId: "request-excluded", stopReason: "error", content: [] };
       await providerConfig.streamSimple(
         { id: "synthetic", api: "openai-completions", headers },
@@ -2063,12 +2066,11 @@ describe("Pi inherited history and workflow provenance", () => {
         { headers },
       ).result();
       const omitted = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
-      expect(omitted?.stream_id).toBe(candidate?.stream_id);
+      expect(typeof omitted?.stream_id).toBe("string");
       expect(omitted?.depends_on).toBeNull();
 
       const includedHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: includedHeaders }, ctx);
-      const includedCandidate = parseAgentMetadata(includedHeaders.get("x-tokenvisor-agent"));
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = { responseId: "request-included", stopReason: "error", content: [] };
       const noticeText = piSubagentsNoticeContextText(branch.find((entry) => entry.customType === "subagent-notify" &&
         entry.details?.runs?.some((run: any) => run.workflowRunId === workflow.workflowRunId))!.content);
@@ -2078,8 +2080,13 @@ describe("Pi inherited history and workflow provenance", () => {
         { headers: includedHeaders },
       ).result();
       const included = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
-      expect(included?.stream_id).toBe(includedCandidate?.stream_id);
-      expect(included?.depends_on).toEqual(candidate?.depends_on);
+      expect(typeof included?.stream_id).toBe("string");
+      expect(included?.stream_id).not.toBe(omitted?.stream_id);
+      expect(included?.depends_on).toEqual(workflow.children.map((child) => ({
+        session_id: `pi:session:${child.sessionId}`,
+        response_id: child.responseId,
+        run_id: child.runId,
+      })));
       const compactBoundary = "call-hook";
       expect(branch.some((entry) => entry.id === compactBoundary)).toBe(true);
       const preparation = {
@@ -2094,12 +2101,6 @@ describe("Pi inherited history and workflow provenance", () => {
       const runSummaryStream = async (prompt: string, responseId: string, content: unknown[] = [{ type: "text", text: `${responseId} summary output` }]) => {
         const summaryHeaders = new Headers();
         hooks.get("before_provider_headers")!({ headers: summaryHeaders }, ctx);
-        const candidate = parseAgentMetadata(summaryHeaders.get("x-tokenvisor-agent"));
-        expect(candidate?.depends_on).toEqual(workflow.children.map((child) => ({
-            session_id: `pi:session:${child.sessionId}`,
-            response_id: child.responseId,
-            run_id: child.runId,
-          })));
         (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
           responseId,
           stopReason: "stop",
@@ -2112,7 +2113,8 @@ describe("Pi inherited history and workflow provenance", () => {
         ).result();
         await Promise.resolve();
         const finalized = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
-        summaryStreams.push({ stream_id: candidate!.stream_id, response_id: responseId });
+        expect(typeof finalized?.stream_id).toBe("string");
+        summaryStreams.push({ stream_id: finalized!.stream_id, response_id: responseId });
         return finalized;
       };
 
@@ -2214,8 +2216,6 @@ describe("Pi inherited history and workflow provenance", () => {
       } }, ctx);
       const retainedSummaryHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: retainedSummaryHeaders }, ctx);
-      const retainedSummaryCandidate = parseAgentMetadata(retainedSummaryHeaders.get("x-tokenvisor-agent"));
-      expect(retainedSummaryCandidate?.depends_on).toEqual([]);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "retained-compaction-summary-response",
         stopReason: "stop",
@@ -2253,11 +2253,6 @@ describe("Pi inherited history and workflow provenance", () => {
       });
       const resumedHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: resumedHeaders }, ctx);
-      const resumedCandidate = parseAgentMetadata(resumedHeaders.get("x-tokenvisor-agent"));
-      expect(resumedCandidate?.depends_on).toEqual([{
-        session_id: "pi:session:parent",
-        stream_id: retainedSummaryCandidate?.stream_id,
-      }]);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "expired-child-resume-response",
         stopReason: "stop",
@@ -2274,7 +2269,10 @@ describe("Pi inherited history and workflow provenance", () => {
       ).result();
       await Promise.resolve();
       const resumedMetadata = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
-      expect(resumedMetadata?.depends_on).toEqual(resumedCandidate?.depends_on);
+      expect(resumedMetadata?.depends_on).toEqual([{
+        session_id: "pi:session:parent",
+        stream_id: retainedSummaryMetadata?.stream_id,
+      }]);
 
       hooks.get("session_shutdown")!({}, ctx);
       expect(api.calls[3]).toBe("disposed");
@@ -2309,8 +2307,6 @@ describe("Pi inherited history and workflow provenance", () => {
       } }, ctx);
       const summaryHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: summaryHeaders }, ctx);
-      const summaryCandidate = parseAgentMetadata(summaryHeaders.get("x-tokenvisor-agent"));
-      expect(summaryCandidate?.depends_on).toEqual([]);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "progress-only-summary-response",
         stopReason: "stop",
@@ -2341,17 +2337,12 @@ describe("Pi inherited history and workflow provenance", () => {
       );
       expect(compactionRecord?.data).toMatchObject({
         available: true,
-        contributors: [{ stream_id: summaryCandidate?.stream_id }],
+        contributors: [{ stream_id: summaryMetadata?.stream_id }],
         consumedDependencies: [],
       });
 
       const continuationHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: continuationHeaders }, ctx);
-      const continuationCandidate = parseAgentMetadata(continuationHeaders.get("x-tokenvisor-agent"));
-      expect(continuationCandidate?.depends_on).toEqual([{
-        session_id: "pi:session:parent",
-        stream_id: summaryMetadata?.stream_id,
-      }]);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "progress-only-continuation-response",
         stopReason: "stop",
@@ -2367,7 +2358,10 @@ describe("Pi inherited history and workflow provenance", () => {
       ).result();
       await Promise.resolve();
       const continuationMetadata = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
-      expect(continuationMetadata?.depends_on).toEqual(continuationCandidate?.depends_on);
+      expect(continuationMetadata?.depends_on).toEqual([{
+        session_id: "pi:session:parent",
+        stream_id: summaryMetadata?.stream_id,
+      }]);
     } finally {
       harness.cleanup();
     }
@@ -2400,8 +2394,6 @@ describe("Pi inherited history and workflow provenance", () => {
       } }, ctx);
       const summaryHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: summaryHeaders }, ctx);
-      const summaryCandidate = parseAgentMetadata(summaryHeaders.get("x-tokenvisor-agent"));
-      expect(summaryCandidate?.depends_on).toEqual([]);
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: "over-budget-summary-response",
         stopReason: "stop",
@@ -2434,7 +2426,18 @@ describe("Pi inherited history and workflow provenance", () => {
 
       const continuationHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: continuationHeaders }, ctx);
-      expect(parseAgentMetadata(continuationHeaders.get("x-tokenvisor-agent"))?.depends_on).toBeNull();
+      (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
+        responseId: "over-budget-continuation-response",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Continued after over-budget compaction." }],
+      };
+      await providerConfig.streamSimple(
+        { id: "synthetic", api: "openai-completions", headers: continuationHeaders },
+        { messages: [{ role: "user", content: [{ type: "text", text: nativeCompaction.summary }] }] },
+        { headers: continuationHeaders },
+      ).result();
+      const continuationMetadata = parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__.headers).get("x-tokenvisor-agent"));
+      expect(continuationMetadata?.depends_on).toBeNull();
     } finally {
       harness.cleanup();
     }

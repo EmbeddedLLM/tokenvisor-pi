@@ -1,6 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createHash } from "crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import {
@@ -12,10 +11,10 @@ import {
   readOmpTaskResultDependencies,
   registerOmpTaskLifecycleStarted,
   OMP_RUN_COMPLETION_ENTRY,
+  OMP_TASK_RESULT_CONSUMPTION_ENTRY,
   retireOmpEarlyTaskBinding,
   type OmpRuntimeCaptureState,
 } from "../src/capture/omp.ts";
-import { readNativeSessionHeader } from "../src/capture/native-session.ts";
 
 const fixturesRoot = mkdtempSync(join(tmpdir(), "tokenvisor-omp-blocking-binding-"));
 afterAll(() => rmSync(fixturesRoot, { recursive: true, force: true }));
@@ -133,94 +132,8 @@ function register(fixture: ReturnType<typeof createFixture>): boolean {
 
 describe("OMP fresh blocking-task binding", () => {
   if (process.env.TOKENVISOR_OMP_CAPTURE_BENCHMARK === "1") {
-    test("measures the added lifecycle and blocking-result helper cost", () => {
-      const fixture = createFixture(`benchmark-${process.pid}`);
-      appendChildResult(fixture);
-      const built = blockingBranch(fixture);
-      const inputFingerprint = createHash("sha256").update(JSON.stringify({
-        parentId: fixture.parentSessionId,
-        branch: built.branch,
-        effectiveMessages: built.effectiveMessages,
-      })).digest("hex");
-      const baseCapture = () => {
-        const header = readNativeSessionHeader(fixture.parentSessionFile);
-        const dependencies = readOmpTaskResultDependencies(
-          fixture.parentSessionFile,
-          fixture.parentSessionId,
-          built.branch,
-          built.effectiveMessages,
-        );
-        if (header?.id !== fixture.parentSessionId || dependencies?.dependencies.length !== 0) {
-          throw new Error("The identity-only benchmark baseline changed its result");
-        }
-      };
-      const lifecycleCapture = () => {
-        if (!register(fixture)) throw new Error("The native lifecycle fixture did not validate");
-        const result = readOmpBlockingTaskResultDependencies(
-          fixture.state,
-          fixture.parentSessionFile,
-          fixture.parentSessionId,
-          built.branch,
-          built.effectiveMessages,
-        );
-        if (result?.dependencies.length !== 1 || result.references.length !== 1) {
-          throw new Error("The blocking-result fixture did not resolve one child response");
-        }
-      };
-      const baselineSamples: number[] = [];
-      const lifecycleSamples: number[] = [];
-      const dispatchSamples: number[] = [];
-      const extractionSamples: number[] = [];
-      for (let index = 0; index < 8; index += 1) {
-        baseCapture();
-        lifecycleCapture();
-      }
-      for (let index = 0; index < 32; index += 1) {
-        let start = performance.now();
-        baseCapture();
-        baselineSamples.push(performance.now() - start);
-
-        start = performance.now();
-        baseCapture();
-        const identityCaptured = performance.now();
-        if (!register(fixture)) throw new Error("The native lifecycle fixture did not validate");
-        const dispatched = performance.now();
-        const result = readOmpBlockingTaskResultDependencies(
-          fixture.state,
-          fixture.parentSessionFile,
-          fixture.parentSessionId,
-          built.branch,
-          built.effectiveMessages,
-        );
-        const finished = performance.now();
-        if (result?.dependencies.length !== 1 || result.references.length !== 1) {
-          throw new Error("The blocking-result fixture did not resolve one child response");
-        }
-        dispatchSamples.push(dispatched - identityCaptured);
-        extractionSamples.push(finished - dispatched);
-        lifecycleSamples.push(finished - start);
-      }
-      const percentile = (samples: number[], fraction: number) => {
-        const ordered = [...samples].sort((left, right) => left - right);
-        return Number(ordered[Math.ceil(ordered.length * fraction) - 1]!.toFixed(3));
-      };
-      console.log("OMP_CAPTURE_BENCHMARK", JSON.stringify({
-        samples: baselineSamples.length,
-        warmup: 8,
-        inputFingerprint,
-        baselineIdentityAndExistingDependencyP50P95Ms: [percentile(baselineSamples, 0.5), percentile(baselineSamples, 0.95)],
-        lifecycleRegistrationP50P95Ms: [percentile(dispatchSamples, 0.5), percentile(dispatchSamples, 0.95)],
-        blockingExtractionP50P95Ms: [percentile(extractionSamples, 0.5), percentile(extractionSamples, 0.95)],
-        enabledCombinedP50P95Ms: [percentile(lifecycleSamples, 0.5), percentile(lifecycleSamples, 0.95)],
-        delegateCalls: 0,
-        note: "Direct capture-helper measurement; provider dispatch, request serialization, and delegate/cache behavior are outside this benchmark.",
-      }));
-      clearOmpEarlyTaskBindingsForSession(fixture.state, fixture.parentSessionId);
-      clearOmpTaskBindingRetirementsForSession(fixture.state, fixture.parentSessionId);
-      expect([...fixture.state.earlyTaskBindings.values()].filter((binding: any) =>
-        binding.parentSessionId === fixture.parentSessionId,
-      )).toHaveLength(0);
-      expect(fixture.state.pendingTaskBindingRetirements.has(fixture.parentSessionId)).toBe(false);
+    test("measures the added lifecycle and blocking-result helper cost", async () => {
+      await (await import("../scripts/benchmarks/capture.ts")).benchmarkOmpHelpers({ createFixture, appendChildResult, blockingBranch, register });
     });
   }
 
@@ -296,6 +209,166 @@ describe("OMP fresh blocking-task binding", () => {
       built.branch,
       built.effectiveMessages,
     )).toBeNull();
+  });
+
+  test.each(["persisted-restart", "never-bound"] as const)(
+    "keeps an effective successful result unresolved without a runtime binding (%s)",
+    (scenario) => {
+      /** Guards both lost durable-result provenance and results that were never bound. */
+      const fixture = createFixture(`unbound-${scenario}`);
+      const built = blockingBranch(fixture);
+      let state = fixture.state;
+      let branch = built.branch;
+      if (scenario === "persisted-restart") {
+        appendChildResult(fixture);
+        expect(register(fixture)).toBe(true);
+        writeFileSync(fixture.parentSessionFile, `${built.branch.map((entry) => JSON.stringify(entry)).join("\n")}\n`, { flag: "a" });
+        branch = readFileSync(fixture.parentSessionFile, "utf8").trimEnd().split("\n").slice(1).map((line) => JSON.parse(line));
+        state = createFixture("fresh-runtime-state").state;
+      }
+      expect(readOmpBlockingTaskResultDependencies(
+        state,
+        fixture.parentSessionFile,
+        fixture.parentSessionId,
+        branch,
+        built.effectiveMessages,
+      )).toEqual({ dependencies: null, references: [], bindingIds: [] });
+    },
+  );
+
+  test("ignores an unbound task result omitted or replaced in the effective request", () => {
+    const fixture = createFixture("unbound-filtered");
+    const built = blockingBranch(fixture);
+    for (const effectiveMessages of [
+      [],
+      [{ ...built.effectiveMessages[0], content: [{ type: "text", text: "FILTERED" }] }],
+    ]) {
+      expect(readOmpBlockingTaskResultDependencies(
+        fixture.state,
+        fixture.parentSessionFile,
+        fixture.parentSessionId,
+        built.branch,
+        effectiveMessages,
+      )).toEqual({ dependencies: [], references: [], bindingIds: [] });
+    }
+  });
+
+  test("ignores undelivered or failed unbound results even with missing or duplicate native calls", () => {
+    for (const callShape of ["missing", "duplicate"] as const) {
+      for (const deliveryShape of ["omitted", "replaced", "failed"] as const) {
+        const fixture = createFixture(`unbound-${callShape}-${deliveryShape}`);
+        const built = blockingBranch(fixture);
+        const call = built.branch[0]!.message.content[0];
+        built.branch[0]!.message.content = callShape === "missing" ? [] : [call, call];
+        const effectiveMessages = deliveryShape === "omitted"
+          ? []
+          : deliveryShape === "replaced"
+            ? [{ ...built.effectiveMessages[0], content: [{ type: "text", text: "FILTERED" }] }]
+            : built.effectiveMessages;
+        if (deliveryShape === "failed") built.branch[1]!.message.details.results[0].exitCode = 1;
+        expect(readOmpBlockingTaskResultDependencies(
+          fixture.state,
+          fixture.parentSessionFile,
+          fixture.parentSessionId,
+          built.branch,
+          effectiveMessages,
+        )).toEqual({ dependencies: [], references: [], bindingIds: [] });
+      }
+    }
+  });
+
+  test("ignores unbound failed, aborted, and empty child outputs", () => {
+    for (const [name, changes] of [
+      ["failed", { exitCode: 1 }],
+      ["aborted", { aborted: true }],
+      ["empty", { output: "" }],
+    ] as const) {
+      const fixture = createFixture(`unbound-${name}`);
+      const built = blockingBranch(fixture);
+      Object.assign(built.branch[1]!.message.details.results[0], changes);
+      expect(readOmpBlockingTaskResultDependencies(
+        fixture.state,
+        fixture.parentSessionFile,
+        fixture.parentSessionId,
+        built.branch,
+        built.effectiveMessages,
+      )).toEqual({ dependencies: [], references: [], bindingIds: [] });
+    }
+  });
+
+  test("ignores a background launch acceptance without a child result", () => {
+    const fixture = createFixture("background-acceptance");
+    const built = blockingBranch(fixture);
+    built.branch[1]!.message.content = [{ type: "text", text: "Task started in background" }];
+    built.branch[1]!.message.details.results = [];
+    expect(readOmpBlockingTaskResultDependencies(
+      fixture.state,
+      fixture.parentSessionFile,
+      fixture.parentSessionId,
+      built.branch,
+      [built.branch[1]!.message],
+    )).toEqual({ dependencies: [], references: [], bindingIds: [] });
+  });
+
+  test("keeps missing result metadata unresolved for a known live binding", () => {
+    for (const details of [{ results: [] }, {}]) {
+      const fixture = createFixture(`known-missing-results-${Object.keys(details).length}`);
+      expect(register(fixture)).toBe(true);
+      const built = blockingBranch(fixture);
+      built.branch[1]!.message.details = details;
+      expect(readOmpBlockingTaskResultDependencies(
+        fixture.state,
+        fixture.parentSessionFile,
+        fixture.parentSessionId,
+        built.branch,
+        built.effectiveMessages,
+      )).toEqual({ dependencies: null, references: [], bindingIds: [fixture.allocatedId] });
+    }
+  });
+
+  test("keeps an unbound successful result unresolved among failed results", () => {
+    const fixture = createFixture("unbound-mixed-results");
+    const built = blockingBranch(fixture);
+    built.branch[1]!.message.details.results.unshift({ id: "failed-task", exitCode: 1, output: "failed" });
+    expect(readOmpBlockingTaskResultDependencies(
+      fixture.state,
+      fixture.parentSessionFile,
+      fixture.parentSessionId,
+      built.branch,
+      built.effectiveMessages,
+    )).toEqual({ dependencies: null, references: [], bindingIds: [] });
+  });
+
+  test("leaves a task result dependency-free after its compaction consumer is committed", () => {
+    const fixture = createFixture("consumed-result");
+    const built = blockingBranch(fixture);
+    const consumerId = "compaction-consumed-result";
+    built.branch.push({
+      type: "compaction",
+      id: consumerId,
+    }, {
+      type: "custom",
+      customType: OMP_TASK_RESULT_CONSUMPTION_ENTRY,
+      data: {
+        version: 1,
+        parentSessionId: fixture.parentSessionId,
+        consumer: { type: "compaction", id: consumerId },
+        references: [{
+          sessionId: fixture.childSessionId,
+          responseId: "child-terminal",
+          runId: `omp:task:${fixture.allocatedId}`,
+          deliveryId: built.resultEntryId,
+          jobId: fixture.allocatedId,
+        }],
+      },
+    });
+    expect(readOmpBlockingTaskResultDependencies(
+      fixture.state,
+      fixture.parentSessionFile,
+      fixture.parentSessionId,
+      built.branch,
+      built.effectiveMessages,
+    )).toEqual({ dependencies: [], references: [], bindingIds: [] });
   });
 
   test("resolves a started binding by allocated ID and the exact terminal child response", () => {
@@ -504,7 +577,7 @@ describe("OMP fresh blocking-task binding", () => {
       fixture.parentSessionId,
       built.branch,
       built.effectiveMessages,
-    )).toEqual({ dependencies: [], references: [], bindingIds: [] });
+    )).toEqual({ dependencies: null, references: [], bindingIds: [] });
   });
 
   test("does not use the last child or latest response when the allocated result ID is unknown", () => {

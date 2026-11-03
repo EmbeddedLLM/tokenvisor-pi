@@ -21,6 +21,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test",
+    "benchmark:capture": "node scripts/benchmark-capture.mjs",
     "check:backend-conformance": "bun scripts/check-conformance-parity.mjs"
   }
 }

@@ -40,11 +40,15 @@ The `package.json` `pi` manifest is read by both hosts (omp falls back to the `p
 
 On supported runtimes, the extension automatically attaches a bounded `X-TokenVisor-Agent` envelope to TokenVisor provider calls. The envelope contains session, stream, sequence, delegation, and dependency identifiers; it never contains prompts or tool output. Transport retries reuse the same envelope. There is no capture enable/disable setting.
 
+Pi's global header hook keeps the request's native evidence private. Only the registered TokenVisor provider wrapper claims that evidence and adds the envelope to its outgoing request. Requests routed to other providers receive no injected metadata and do not consume pending launch receipts, even when the selected model differs from the physical request provider. Evidence is frozen at the native hook boundary, before child status files can change, and each request claim is single-use.
+
 For local metadata diagnostics, optionally set `TOKENVISOR_AGENT_METADATA_DIAGNOSTICS=/path/to/private.jsonl`. This writes identifiers and extraction statuses with file mode `0600`; it does not control metadata transmission.
 
 When capture detects a specific limitation, it warns once per session and distinct issue in the process that request linkage may be incomplete. The provider continues inference and keeps any valid metadata it can establish. Unknown package versions alone do not trigger a warning. See [Known OMP provenance gaps](#known-omp-provenance-gaps) for the affected paths and their audit/export impact.
 
 Run `bun test` and `bun run typecheck` from this package checkout to validate the producer. Producer CI runs these checks after `npm ci` with Node `22.19.0` and Bun `1.3.14`; live Pi/OMP qualification remains a separate opt-in procedure and is not run by this CI job.
+
+Run `npm run benchmark:capture` for optional synthetic capture timings. The timing loops and reports live in `scripts/benchmarks/capture.ts` and reuse the regression fixtures through small benchmark entry points. They check fixture correctness and report timings without performance thresholds. These measurements use fake delegates, require no running server or native Pi/OMP process, and do not measure HTTP serialization, network latency, model latency, or cache behavior. Ordinary producer CI does not run these experiments.
 
 To check that this producer's canonical schema and examples match TokenVisor's backend fixture copies, run `bun run check:backend-conformance -- /path/to/TokenVisor/services/api/tests/utils/audit/fixtures`. The checker reads that supplied fixture directory and compares those two JSON contracts structurally, ignoring formatting. It does not fetch a backend repository or query a running backend. Backend contract tests separately validate the copied examples against its DTO.
 
@@ -106,6 +110,8 @@ Qualification cohorts include Pi `1.4.0` with pi-subagents `0.83.0` and `0.84.0`
 
 ### Known OMP provenance gaps
 
+After a process restart, a successful blocking task result can remain in the effective request input before its consumer response has committed, while the process-local launch binding is gone. Such an unbound, unconsumed result produces `depends_on: null`, rather than a false empty dependency list. Filtered or replaced output, failed/aborted/empty results and already-consumed deliveries do not create new dependencies. This correction does not reconstruct lost bindings from durable evidence and requires no OMP core or TokenVisor schema change.
+
 Two relationships remain unqualified in the tested compiled OMP `18.12.6` runtime. This version identifies the observed build; it is not a capture allowlist.
 
 - **Peer-wake origin:** a child can continue after a peer message, but the available native evidence does not always identify the exact caller request that caused that continuation. The original delegation and the child's own request sequence can remain known while this additional causal edge is unknown.
@@ -113,7 +119,7 @@ Two relationships remain unqualified in the tested compiled OMP `18.12.6` runtim
 
 For affected requests, inference continues and capture preserves the identities and relationships it can verify. Unavailable dependency extraction is emitted as `depends_on: null`, with a warning once per session, process and distinct issue. TokenVisor can retain the audits and reconstruct the evidenced graph while reporting the missing relationship, such as `dependencies_unavailable`. A model-free compaction does not repair missing provenance. The extension does not guess the missing edge from timestamps or output-text similarity.
 
-The current strict TokenVisor WEKA/AIPerf exporter rejects a graph with unresolved relationships; retaining the audits does not make that whole trace exportable. Closing these gaps requires authoritative native provenance for wake origins and result deliveries that remains available when inspecting the actual provider input. These limitations are separate from the failed auto-thinking judge sequence recovery described above and from TokenVisor's backend midstream-retry defect.
+The current strict TokenVisor WEKA/AIPerf exporter rejects a graph with unresolved relationships; retaining the audits does not make that whole trace exportable. Closing these gaps requires authoritative native provenance for wake origins and result deliveries that remains available when inspecting the actual provider input. These limitations are separate from the failed auto-thinking judge sequence recovery described above and from TokenVisor's stable public identity handling across internal provider retries.
 
 ## Setup
 

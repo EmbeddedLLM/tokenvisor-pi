@@ -48,18 +48,12 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath, pathToFileURL } from "url";
 import {
-  AGENT_HEADER,
-  claimFreshRequestMetadata,
-  clearAgentMetadataHeader,
   encodeAgentMetadata,
-  headerValue,
   appendPendingChildLaunches,
   parseAgentMetadata,
   packChildLaunches,
-  recordFreshRequestMetadata,
   stripAgentMetadataHeader,
   withAgentMetadataHeader,
-  writeAgentMetadataHeader,
   type AgentMetadata,
   type MetadataIdentity,
   type ChildLaunchReceipt,
@@ -529,8 +523,8 @@ export default async function (pi: ExtensionAPI) {
   const compactionTaskResultReferences = ompCaptureState?.compactionTaskResultReferences ?? new Map<string, OmpTaskResultReference[]>();
   const ompTaskResultReferencesByStream = ompCaptureState?.taskResultReferencesByStream ?? new Map<string, { sessionId: string; references: OmpTaskResultReference[] }>();
   const ompTaskBindingIdsByStream = new Map<string, { sessionId: string; bindingIds: string[] }>();
-  const piRequestMetadataByStream = new Map<string, string>();
-  const piRequestDeliveryWitnessesByStream = new Map<string, PiDependencyDeliveryWitness[]>();
+  const piRequestClaims = new WeakMap<object, () => { encoded: string; witnesses: PiDependencyDeliveryWitness[] } | undefined>();
+  const piRequestOwners = new Map<string, object>();
   const piPendingResultConsumptions = new Map<string, Map<string, { streamId: string; responseId: string; dependencies: NonNullable<AgentMetadata["depends_on"]> }>>();
   const piPendingLaunchReceiptsBySession = new Map<string, ChildLaunchReceipt[]>();
   const piLaunchReceiptsByStream = new Map<string, ChildLaunchReceipt[]>();
@@ -651,6 +645,7 @@ export default async function (pi: ExtensionAPI) {
     });
     if (runtimeHost === "pi") captureHandler.on("session_shutdown", (_event, ctx) => {
       const sessionId = ctx.sessionManager.getSessionId();
+      piRequestOwners.delete(sessionId);
       childRegistrations.get(sessionId)?.dispose();
       childRegistrations.delete(sessionId);
       piPendingResultConsumptions.delete(sessionId);
@@ -660,8 +655,6 @@ export default async function (pi: ExtensionAPI) {
         if (ownerSessionId === sessionId) {
           piLaunchReceiptSessionByStream.delete(streamId);
           piLaunchReceiptsByStream.delete(streamId);
-          piRequestMetadataByStream.delete(streamId);
-          piRequestDeliveryWitnessesByStream.delete(streamId);
         }
       }
       compactionConsumedDependencies.delete(sessionId);
@@ -673,13 +666,6 @@ export default async function (pi: ExtensionAPI) {
       piCompactionPreparationBySession.delete(sessionId);
       piCompactionLastResponseBySession.delete(sessionId);
       forkedRoots.delete(sessionId);
-      for (const [streamId, encoded] of piRequestMetadataByStream) {
-        const metadata = parseAgentMetadata(encoded);
-        if (metadata?.session.id === `pi:session:${sessionId}`) {
-          piRequestMetadataByStream.delete(streamId);
-          piRequestDeliveryWitnessesByStream.delete(streamId);
-        }
-      }
       clearPiCompactionStreams(sessionId);
     });
     if (runtimeHost === "omp") captureHandler.on("session_shutdown", (_event, ctx) => {
@@ -1002,9 +988,25 @@ export default async function (pi: ExtensionAPI) {
       compactionTaskResultReferences.delete(sessionId);
     });
     if (runtimeHost === "pi") captureHandler.on("before_provider_headers", (event, ctx) => {
-      const headers = event.headers;
-      clearAgentMetadataHeader(headers);
-      const sessionId = ctx.sessionManager.getSessionId();
+      // Freeze native evidence here, but keep it off the wire. Only the physical
+      // TokenVisor provider may claim it and commit capture bookkeeping.
+      piRequestClaims.set(event.headers, preparePiRequestMetadata(ctx));
+    });
+  }
+
+  const preparePiRequestMetadata = (ctx: any) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    let owner = piRequestOwners.get(sessionId);
+    if (!owner) {
+      owner = {};
+      piRequestOwners.set(sessionId, owner);
+    }
+    let atCapacity = false;
+    const effects: Array<() => void> = [];
+    const diagnostic = (record: Parameters<typeof appendMetadataDiagnostic>[1]) => {
+      effects.push(() => appendMetadataDiagnostic(capturePath, record));
+    };
+    const prepare = () => {
       const streamId = randomUUID();
       const forkedRoot = forkedRoots.has(sessionId);
       const parentSessionFile = ctx.sessionManager.getHeader?.()?.parentSession;
@@ -1012,17 +1014,15 @@ export default async function (pi: ExtensionAPI) {
       const delegation = parentSessionFile && !forkedRoot
         ? readPiSubagentDelegation(ctx.sessionManager.getSessionFile?.(), parentSessionId, "active", readPiParentBranchForChild(ctx))
         : null;
-      const resolvedRunIds: string[] = [];
       const deliveryWitnesses: PiDependencyDeliveryWitness[] = [];
       deliveryWitnesses.push(...readPiRenderedCompactionWitnesses(ctx, piCompactionRenderer));
       let resultDependencies = readPiUnconsumedRunDependencies(
         ctx,
-        (runId) => resolvedRunIds.push(runId),
         (dependency, deliveredText, channel) => deliveryWitnesses.push({ dependency, deliveredText, ...channel }),
       );
       if (resultDependencies === null) {
-        if (runtimeHost === "pi" && compactionCaptureActive.has(sessionId)) compactionStreamFailures.add(sessionId);
-        appendMetadataDiagnostic(capturePath, {
+        if (runtimeHost === "pi" && compactionCaptureActive.has(sessionId)) effects.push(() => compactionStreamFailures.add(sessionId));
+        diagnostic({
           session_id: `pi:session:${sessionId}`,
           status: "result_dependency_unavailable",
         });
@@ -1030,9 +1030,9 @@ export default async function (pi: ExtensionAPI) {
       if (compactionCaptureActive.has(sessionId)) {
         // Candidate lineage is not consumed until the provider wrapper sees the
         // request-local input and finalizes the outgoing metadata.
-        compactionRunIdsByStream.set(streamId, []);
-        compactionDependenciesByStream.set(streamId, []);
-        compactionSessionByStream.set(streamId, sessionId);
+        effects.push(() => compactionRunIdsByStream.set(streamId, []));
+        effects.push(() => compactionDependenciesByStream.set(streamId, []));
+        effects.push(() => compactionSessionByStream.set(streamId, sessionId));
       }
       const identity = derivePiIdentity(ctx, {
         forkedRoot,
@@ -1042,26 +1042,28 @@ export default async function (pi: ExtensionAPI) {
         resultDependencies,
       });
       if (!identity) {
-        if (compactionCaptureActive.has(sessionId)) compactionStreamFailures.add(sessionId);
-        appendMetadataDiagnostic(capturePath, { session_id: `pi:session:${sessionId}`, status: "metadata_unavailable" });
-        warnCaptureLimitation(ctx, `pi:session:${sessionId}`, "request-identity", "request identity could not be resolved");
+        if (compactionCaptureActive.has(sessionId)) effects.push(() => compactionStreamFailures.add(sessionId));
+        diagnostic({ session_id: `pi:session:${sessionId}`, status: "metadata_unavailable" });
+        effects.push(() => warnCaptureLimitation(ctx, `pi:session:${sessionId}`, "request-identity", "request identity could not be resolved"));
         return;
       }
       const pendingLaunchReceipts = piPendingLaunchReceiptsBySession.get(sessionId) ?? [];
-      const outstandingReceiptStreams = [...piLaunchReceiptSessionByStream.values()].filter((owner) => owner === sessionId).length;
-      if (outstandingReceiptStreams >= 16) {
-        appendMetadataDiagnostic(capturePath, { session_id: `pi:session:${sessionId}`, status: "launch_receipt_stream_binding_cap" });
-        return;
-      }
+      effects.push(() => {
+        const outstanding = [...piLaunchReceiptSessionByStream.values()].filter((owner) => owner === sessionId).length;
+        if (outstanding >= 16) {
+          appendMetadataDiagnostic(capturePath, { session_id: `pi:session:${sessionId}`, status: "launch_receipt_stream_binding_cap" });
+          atCapacity = true;
+        }
+      });
       const packed = packChildLaunches(identity, streamId, pendingLaunchReceipts);
       let metadata = packed.encoded;
       if (!metadata) {
-        if (compactionCaptureActive.has(sessionId)) compactionStreamFailures.add(sessionId);
-        appendMetadataDiagnostic(capturePath, { session_id: `pi:session:${sessionId}`, status: "metadata_unavailable" });
+        if (compactionCaptureActive.has(sessionId)) effects.push(() => compactionStreamFailures.add(sessionId));
+        diagnostic({ session_id: `pi:session:${sessionId}`, status: "metadata_unavailable" });
         return;
       }
       if (packed.unencodableIndices.length > 0) {
-        appendMetadataDiagnostic(capturePath, {
+        diagnostic({
           session_id: `pi:session:${sessionId}`,
           count: packed.unencodableIndices.length,
           status: "launch_receipt_unencodable",
@@ -1069,7 +1071,7 @@ export default async function (pi: ExtensionAPI) {
       }
       let parsed = parseAgentMetadata(metadata);
       if (!parsed || parsed.session.root_id === null) {
-        appendMetadataDiagnostic(capturePath, { session_id: `pi:session:${sessionId}`, status: "native_lineage_unavailable" });
+        diagnostic({ session_id: `pi:session:${sessionId}`, status: "native_lineage_unavailable" });
         return;
       }
       const previousSummaryResponseId = compactionCaptureActive.has(sessionId)
@@ -1081,25 +1083,35 @@ export default async function (pi: ExtensionAPI) {
           sequence: { status: "linked", previous_response_id: previousSummaryResponseId },
         });
         if (!sequenced) {
-          compactionStreamFailures.add(sessionId);
-          appendMetadataDiagnostic(capturePath, { session_id: `pi:session:${sessionId}`, status: "compaction_sequence_unavailable" });
+          effects.push(() => compactionStreamFailures.add(sessionId));
+          diagnostic({ session_id: `pi:session:${sessionId}`, status: "compaction_sequence_unavailable" });
           return;
         }
         metadata = sequenced;
         parsed = parseAgentMetadata(metadata);
       }
-      if (!recordFreshRequestMetadata(piRequestMetadataByStream, metadata)) {
+      if (packed.included.length > 0) {
+        const receipts = packed.included.map((receipt) => ({ ...receipt }));
+        effects.push(() => {
+          piLaunchReceiptsByStream.set(streamId, receipts);
+          piLaunchReceiptSessionByStream.set(streamId, sessionId);
+        });
+      }
+      return { encoded: metadata, witnesses: deliveryWitnesses };
+    };
+    const prepared = prepare();
+    return () => {
+      if (piRequestOwners.get(sessionId) !== owner) {
         appendMetadataDiagnostic(capturePath, { session_id: `pi:session:${sessionId}`, status: "stream_binding_unavailable" });
         return;
       }
-      if (packed.included.length > 0) {
-        piLaunchReceiptsByStream.set(streamId, packed.included.map((receipt) => ({ ...receipt })));
-        piLaunchReceiptSessionByStream.set(streamId, sessionId);
+      for (const effect of effects) {
+        effect();
+        if (atCapacity) return;
       }
-      piRequestDeliveryWitnessesByStream.set(streamId, deliveryWitnesses);
-      writeAgentMetadataHeader(headers, metadata);
-    });
-  }
+      return prepared;
+    };
+  };
 
   const providerConfig: ProviderConfig = {
     name: "TokenVisor",
@@ -1122,23 +1134,21 @@ export default async function (pi: ExtensionAPI) {
         : { ...options, headers: stripAgentMetadataHeader(options.headers) as CaptureStreamOptions["headers"] };
       let encoded: string | undefined;
       let trustedPiMetadata: AgentMetadata | null = null;
+      let piDeliveryWitnesses: PiDependencyDeliveryWitness[] = [];
       let ompSequenceState: ReturnType<typeof createOmpSequenceState> | undefined;
       let ompSequenceAnchorId: string | null = null;
       let ompNativeSequence: { previousResponseId: string | null; hasPriorHistory: boolean } | undefined;
       let ompTaskResultReferences: OmpTaskResultReference[] | undefined;
       let ompTaskBindingIds: string[] | undefined;
       if (runtimeHost === "pi") {
-        const reservedHeader = headerValue(options?.headers) ?? headerValue(model.headers);
-        const claim = claimFreshRequestMetadata(piRequestMetadataByStream, reservedHeader);
-        if (claim) {
-          encoded = claim.encoded;
-          trustedPiMetadata = claim.metadata;
-          streamOptions = {
-            ...(streamOptions ?? {}),
-            headers: withAgentMetadataHeader(streamOptions?.headers, claim.encoded) as CaptureStreamOptions["headers"],
-          };
-        } else if (reservedHeader !== undefined) {
-          appendMetadataDiagnostic(capturePath, { status: "stream_binding_unavailable" });
+        const requestHeaders = options?.headers ?? model.headers;
+        const claim = requestHeaders && piRequestClaims.get(requestHeaders);
+        if (requestHeaders) piRequestClaims.delete(requestHeaders);
+        const prepared = claim?.();
+        if (prepared) {
+          encoded = prepared.encoded;
+          trustedPiMetadata = parseAgentMetadata(encoded);
+          piDeliveryWitnesses = prepared.witnesses;
         }
       }
       if (runtimeHost === "omp" && typeof options?.sessionId === "string") {
@@ -1262,8 +1272,7 @@ export default async function (pi: ExtensionAPI) {
         }
       }
       if (runtimeHost === "pi" && trustedPiMetadata && encoded) {
-        const witnesses = piRequestDeliveryWitnessesByStream.get(trustedPiMetadata.stream_id) ?? [];
-        piRequestDeliveryWitnessesByStream.delete(trustedPiMetadata.stream_id);
+        const witnesses = piDeliveryWitnesses;
         const requestMessages = (context as { messages?: unknown }).messages;
         const sessionId = trustedPiMetadata.session.id.slice("pi:session:".length);
         const hasDependencies = trustedPiMetadata.depends_on !== null && trustedPiMetadata.depends_on.length > 0;

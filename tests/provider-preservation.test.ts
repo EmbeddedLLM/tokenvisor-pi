@@ -104,18 +104,18 @@ describe("registered provider input preservation", () => {
         appendEntry: () => {},
       } as any);
 
+      const nativeBranch: any[] = [];
       const contextManager = {
         getSessionId: () => sessionId,
         getSessionFile: () => sessionFile,
         getHeader: () => nativeHeader,
-        getBranch: () => [],
+        getBranch: () => nativeBranch,
       };
       const hostContext = { sessionManager: contextManager, agent: { kind: "main" } };
       hooks.get("session_start")!({ reason: "startup" }, hostContext);
       const requestHeaders: Record<string, string> = { "x-options-setting": "preserve" };
       if (host === "pi") hooks.get("before_provider_headers")!({ headers: requestHeaders }, hostContext);
-      const expectedMetadata = requestHeaders[AGENT_HEADER];
-      if (host === "pi") expect(parseAgentMetadata(expectedMetadata)?.session.id).toBe(`pi:session:${sessionId}`);
+      if (host === "pi") expect(requestHeaders[AGENT_HEADER]).toBeUndefined();
 
       const context = deepFreeze({
         messages: [
@@ -151,7 +151,6 @@ describe("registered provider input preservation", () => {
       const delegatedMetadata = parseAgentMetadata(delegatedAgentMetadata);
       expect(delegatedMetadata?.session.id).toBe(`${host}:session:${sessionId}`);
       expect(delegatedMetadata?.stream_id).toBeTruthy();
-      if (host === "pi") expect(delegatedAgentMetadata).toBe(expectedMetadata);
       expect(captured!.options).toEqual({
         ...optionsSnapshot,
         headers: { ...optionsSnapshot.headers, [AGENT_HEADER]: delegatedAgentMetadata },
@@ -160,6 +159,29 @@ describe("registered provider input preservation", () => {
       expect(context).toEqual(contextSnapshot);
       expect(model).toEqual(modelSnapshot);
       expect(options).toEqual({ ...optionsSnapshot, signal });
+      if (host === "omp") {
+        // A durable successful result with no process-local launch binding must
+        // reach the wire as unknown, while the ordinary inference input survives.
+        expect(delegatedMetadata?.depends_on).toEqual([]);
+        const launch = { type: "message", id: "persisted-launch-entry", message: {
+          role: "assistant", responseId: "persisted-launch", stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "persisted-task-call", name: "task", arguments: { agent: "any-role" } }],
+        } };
+        const delivery = { type: "message", id: "persisted-result-entry", message: {
+          role: "toolResult", toolName: "task", toolCallId: "persisted-task-call",
+          content: [{ type: "text", text: '<task-result id="resumed-child" agent="any-role" status="completed" duration="1s">\n\n<output>\nchild answer\n</output>\n</task-result>' }],
+          details: { results: [{ id: "resumed-child", exitCode: 0, output: "child answer", aborted: false }] },
+        } };
+        nativeBranch.push(launch, delivery);
+        writeFileSync(sessionFile, [nativeHeader, ...nativeBranch].map(row => JSON.stringify(row)).join("\n") + "\n");
+        hooks.get("session_start")!({ reason: "resume" }, hostContext);
+        const resumedContext = deepFreeze({ messages: [launch.message, delivery.message], tools: context.tools });
+        await providerConfig.streamSimple(model, resumedContext, options).result();
+        const resumedMetadata = parseAgentMetadata(captured!.options.headers[AGENT_HEADER]);
+        expect(resumedMetadata?.session.id).toBe(`omp:session:${sessionId}`);
+        expect(resumedMetadata?.depends_on).toBeNull();
+        expect(captured!.context).toEqual(resumedContext);
+      }
       delete (globalThis as any).__TOKENVISOR_PROVIDER_CONTRACT_CAPTURE__;
     });
   }

@@ -126,8 +126,7 @@ describe("registered Pi provider SDK retry", () => {
       hooks.get("session_start")!({ reason: "startup" }, context);
       const headers = new Headers();
       hooks.get("before_provider_headers")!({ headers }, context);
-      const initialMetadata = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
-      expect(initialMetadata?.child_launches).toEqual([receiptOne]);
+      expect(headers.get("x-tokenvisor-agent")).toBeNull();
       const stream = providerConfig.streamSimple(
         { ...providerConfig.models[0], provider: "tokenvisor", api: "openai-completions", baseUrl: `http://127.0.0.1:${server.port}/v1`, headers },
         { messages: [{ role: "user", content: [{ type: "text", text: "retry test" }] }] },
@@ -139,16 +138,25 @@ describe("registered Pi provider SDK retry", () => {
       expect(requestCount).toBe(2);
       expect(requestHeaders).toHaveLength(2);
       expect(requestHeaders[0]!.capture).toBeTruthy();
+      const initialMetadata = parseAgentMetadata(requestHeaders[0]!.capture);
+      expect(initialMetadata?.child_launches).toEqual([receiptOne]);
       expect(requestHeaders[1]!.capture).toBe(requestHeaders[0]!.capture);
       expect(requestHeaders[1]!.streamId).toBe(requestHeaders[0]!.streamId);
       expect(requestHeaders[0]!.streamId).toBe(initialMetadata?.stream_id);
       expect(parseAgentMetadata(requestHeaders[0]!.capture)?.child_launches).toEqual([receiptOne]);
       expect(requestHeaders[1]!.body).toBe(requestHeaders[0]!.body);
       expect(readPiPendingChildLaunchReceipts(context as any)).toEqual([receiptOne, receiptTwo]);
-      expect(parseAgentMetadata(headers.get("x-tokenvisor-agent"))?.stream_id).toBe(initialMetadata?.stream_id);
+      expect(headers.get("x-tokenvisor-agent")).toBeNull();
       const freshHeaders = new Headers();
       hooks.get("before_provider_headers")!({ headers: freshHeaders }, context);
-      const freshMetadata = parseAgentMetadata(freshHeaders.get("x-tokenvisor-agent"));
+      expect(freshHeaders.get("x-tokenvisor-agent")).toBeNull();
+      await providerConfig.streamSimple(
+        { ...providerConfig.models[0], provider: "tokenvisor", api: "openai-completions", baseUrl: `http://127.0.0.1:${server.port}/v1` },
+        { messages: [{ role: "user", content: [{ type: "text", text: "retry test" }] }] },
+        { headers: freshHeaders, apiKey: "synthetic-retry-key", fetch: saved.fetch },
+      ).result();
+      expect(requestCount).toBe(3);
+      const freshMetadata = parseAgentMetadata(requestHeaders[2]!.capture);
       expect(freshMetadata?.child_launches).toEqual([receiptOne, receiptTwo]);
       expect(freshMetadata?.stream_id).not.toBe(initialMetadata?.stream_id);
     } finally {

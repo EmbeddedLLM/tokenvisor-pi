@@ -280,14 +280,6 @@ export function packChildLaunches(
   return { encoded, included, remaining, unencodableIndices };
 }
 
-export function headerValue(headers: unknown, name = AGENT_HEADER): string | undefined {
-  if (headers instanceof Headers) return headers.get(name) ?? undefined;
-  if (!headers || typeof headers !== "object") return undefined;
-  const record = headers as Record<string, unknown>;
-  const key = Object.keys(record).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key && typeof record[key] === "string" ? record[key] as string : undefined;
-}
-
 export function stripAgentMetadataHeader(headers: unknown): Record<string, string> | undefined {
   if (headers instanceof Headers) {
     const result: Record<string, string> = {};
@@ -301,51 +293,7 @@ export function stripAgentMetadataHeader(headers: unknown): Record<string, strin
     .filter(([name]) => name.toLowerCase() !== AGENT_HEADER.toLowerCase())) as Record<string, string>;
 }
 
-export function writeAgentMetadataHeader(headers: unknown, encoded: string): void {
-  if (headers instanceof Headers) {
-    headers.set(AGENT_HEADER, encoded);
-    return;
-  }
-  if (headers && typeof headers === "object" && !Array.isArray(headers)) {
-    (headers as Record<string, unknown>)[AGENT_HEADER] = encoded;
-  }
-}
-
 export function withAgentMetadataHeader(headers: unknown, encoded: string): Record<string, string> {
   const result = stripAgentMetadataHeader(headers);
   return { ...(result ?? {}), [AGENT_HEADER]: encoded };
-}
-
-/** Clears every case variant before a native request snapshots new identity. */
-export function clearAgentMetadataHeader(headers: unknown): void {
-  if (headers instanceof Headers) {
-    headers.delete(AGENT_HEADER);
-    return;
-  }
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) return;
-  for (const name of Object.keys(headers)) {
-    if (name.toLowerCase() === AGENT_HEADER.toLowerCase()) delete (headers as Record<string, unknown>)[name];
-  }
-}
-
-export function recordFreshRequestMetadata(cache: Map<string, string>, encoded: string, maxEntries = 256): boolean {
-  const metadata = parseAgentMetadata(encoded);
-  if (!metadata || !Number.isSafeInteger(maxEntries) || maxEntries < 1) return false;
-  cache.set(metadata.stream_id, encoded);
-  while (cache.size > maxEntries) cache.delete(cache.keys().next().value as string);
-  return true;
-}
-
-export function claimFreshRequestMetadata(
-  cache: Map<string, string>,
-  candidate: unknown,
-): { encoded: string; metadata: AgentMetadata } | null {
-  if (typeof candidate !== "string") return null;
-  const parsed = parseAgentMetadata(candidate);
-  if (!parsed) return null;
-  const encoded = cache.get(parsed.stream_id);
-  cache.delete(parsed.stream_id);
-  if (!encoded || encoded !== candidate) return null;
-  const metadata = parseAgentMetadata(encoded);
-  return metadata ? { encoded, metadata } : null;
 }

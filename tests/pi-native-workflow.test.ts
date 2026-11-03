@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import tokenVisorProvider from "../extensions/tokenvisor-provider.ts";
+import { PI_AI_DELEGATE_SOURCE, resetPiAiDelegate } from "./helpers/pi-ai-delegate.ts";
 import { parseAgentMetadata } from "../src/capture/shared.ts";
 
 const fixturePath = new URL("./fixtures/pi-native-workflow-prefix-v1.json", import.meta.url);
@@ -13,10 +14,8 @@ const savedArgv = process.argv;
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
+  resetPiAiDelegate();
   globalThis.fetch = originalFetch;
-  (globalThis as any).__PI_TEST_STREAM_RESULT__ = undefined;
-  (globalThis as any).__PI_TEST_CAPTURED_OPTIONS__ = undefined;
-  (globalThis as any).__PI_TEST_CAPTURED_CONTEXT__ = undefined;
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);
   process.argv = savedArgv;
@@ -124,7 +123,7 @@ describe("Pi native workflow request-prefix replay", () => {
     writeFileSync(join(host, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "1.4.0" }));
     writeFileSync(join(host, "dist", "cli.js"), "");
     writeFileSync(join(ai, "package.json"), JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.4.0", type: "module" }));
-    writeFileSync(join(ai, "dist", "api", "openai-completions.js"), 'export function streamSimple(model, context, options) { globalThis.__PI_TEST_CAPTURED_OPTIONS__ = options; globalThis.__PI_TEST_CAPTURED_CONTEXT__ = context; return { result: () => Promise.resolve(globalThis.__PI_TEST_STREAM_RESULT__) }; }');
+    writeFileSync(join(ai, "dist", "api", "openai-completions.js"), PI_AI_DELEGATE_SOURCE);
     writeFileSync(join(subagents, "package.json"), JSON.stringify({
       name: "pi-subagents",
       version: "0.83.0",
@@ -309,8 +308,7 @@ describe("Pi native workflow request-prefix replay", () => {
       const headers = new Headers();
       beforeHeaders!({ headers }, ctx);
       if (activeStatus) writeFileSync(statusFiles.get(activeStatus.runId)!, JSON.stringify(statusesByRun.get(activeStatus.runId)));
-      const candidateMetadata = parseAgentMetadata(headers.get("x-tokenvisor-agent"));
-      expect(candidateMetadata, `missing metadata candidate for ${request.response_id}`).toBeDefined();
+      expect(headers.get("x-tokenvisor-agent")).toBeNull();
       const nativeResponse = target.message;
       (globalThis as any).__PI_TEST_STREAM_RESULT__ = {
         responseId: request.response_id,
@@ -415,7 +413,7 @@ describe("Pi native workflow request-prefix replay", () => {
         getBranch: () => failedBranch,
       },
     });
-    expect(parseAgentMetadata(failedHeaders.get("x-tokenvisor-agent"))?.depends_on).toHaveLength(1);
+    expect(failedHeaders.get("x-tokenvisor-agent")).toBeNull();
     failedBranch.push(failedNativeResponse);
     (globalThis as any).__PI_TEST_STREAM_RESULT__ = { responseId: failedResponseId, stopReason: "error", content: [] };
     await providerConfig.streamSimple(
@@ -424,6 +422,7 @@ describe("Pi native workflow request-prefix replay", () => {
       { headers: failedHeaders },
     ).result();
     await Promise.resolve();
+    expect(parseAgentMetadata(new Headers((globalThis as any).__PI_TEST_CAPTURED_OPTIONS__?.headers ?? {}).get("x-tokenvisor-agent"))?.depends_on).toHaveLength(1);
     const committedCountBeforeError = appendedEntries.filter((entry) => entry.customType === "tokenvisor-agent-result-consumption-v1").length;
     const agentEnd = hooks.get("agent_end");
     expect(agentEnd).toBeDefined();

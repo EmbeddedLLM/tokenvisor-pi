@@ -10,9 +10,6 @@ import {
   parseAgentMetadata,
   appendPendingChildLaunches,
   packChildLaunches,
-  claimFreshRequestMetadata,
-  clearAgentMetadataHeader,
-  recordFreshRequestMetadata,
   stripAgentMetadataHeader,
   type AgentMetadata,
   type ChildLaunchReceipt,
@@ -142,25 +139,13 @@ describe("shared agent metadata", () => {
     expect(parseAgentMetadata(JSON.stringify(duplicate))).toBeNull();
   });
 
-  test("uses only fresh native request metadata and clears every reserved header spelling", () => {
-    const cached = new Map<string, string>();
-    const encoded = piEnvelopeForTest(piContext(), "fresh-request-stream");
-    expect(encoded).not.toBeNull();
-    expect(recordFreshRequestMetadata(cached, encoded!)).toBe(true);
-    const candidate = parseAgentMetadata(encoded)!;
-    const old = JSON.stringify({ ...candidate, stream_id: "old-request-stream" });
-    expect(claimFreshRequestMetadata(cached, old)).toBeNull();
-    expect(claimFreshRequestMetadata(cached, encoded)).toEqual({ encoded, metadata: candidate });
-    expect(claimFreshRequestMetadata(cached, encoded)).toBeNull();
+  test("strips every reserved header spelling", () => {
     expect(stripAgentMetadataHeader({
       authorization: "Bearer local",
       ["x-tokenvisor-agent"]: "stale-lowercase",
       ["X-TOKENVISOR-AGENT"]: "stale-uppercase",
       "x-session-id": "native-affinity",
     })).toEqual({ authorization: "Bearer local", "x-session-id": "native-affinity" });
-    const mutable = { ["x-tokenvisor-agent"]: "stale-lowercase", ["X-TOKENVISOR-AGENT"]: "stale-uppercase", "x-session-id": "native-affinity" };
-    clearAgentMetadataHeader(mutable);
-    expect(mutable).toEqual({ "x-session-id": "native-affinity" });
     const headers = new Headers({ "X-tokenvisor-agent": "stale", "x-session-id": "native-affinity" });
     const stripped = stripAgentMetadataHeader(headers);
     expect(stripped?.["x-tokenvisor-agent"]).toBeUndefined();
@@ -1134,7 +1119,7 @@ describe("shared agent metadata", () => {
   });
 
   test("does not treat OMP cache-affinity parentSessionId as native ancestry", () => {
-    const identity = deriveOmpIdentity({ sessionId: ids.root, parentSessionId: ids.child, messages: [] }, ids.stream, [], "18.12.7");
+    const identity = deriveOmpIdentity({ sessionId: ids.root, parentSessionId: ids.child, messages: [] }, [], "18.12.7");
     expect(identity?.rootSessionId).toBeNull();
     expect(identity?.parentSessionId).toBeNull();
     expect(identity?.harnessVersion).toBe("18.12.7");
@@ -1622,12 +1607,12 @@ describe("shared agent metadata", () => {
     expect(boundary).toBe(copied.length);
     const ownBranch = forkBranch.slice(boundary! + 1);
     expect(pendingOmpCompactionDependencies(ownBranch, refs)).toEqual(refs);
-    expect(deriveOmpIdentity({ sessionId: ids.child, isForkedRoot: true, messages: [] }, ids.stream, []).hasPriorHistory).toBe(false);
+    expect(deriveOmpIdentity({ sessionId: ids.child, isForkedRoot: true, messages: [] }, []).hasPriorHistory).toBe(false);
     const later = deriveOmpIdentity({
       sessionId: ids.child,
       isForkedRoot: true,
       messages: [{ role: "assistant", responseId: "fork-response" }],
-    }, ids.stream, refs);
+    }, refs);
     expect(later?.previousResponseId).toBe("fork-response");
     expect(later?.dependsOn).toEqual(refs);
   });
