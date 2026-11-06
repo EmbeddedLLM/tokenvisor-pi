@@ -948,12 +948,6 @@ function readPiPreviouslyDeliveredWorkflowStatusReturn(
   return candidates.length === 1 ? candidates[0]! : null;
 }
 
-function isPiEmptyStatusReturnContent(content: string): boolean {
-  const lines = content.split("\n");
-  if (lines.length !== 2 || !/^Status: (?:running|complete|completed|failed|paused|stopped)$/.test(lines[0]!)) return false;
-  return lines[1]!.startsWith("Return: ") && readPiStatusReturnContent(content) === "none";
-}
-
 interface PiIncrementalChildNotice {
   childKey: string;
   workflowRunId?: string;
@@ -2331,7 +2325,7 @@ function resolvePiDirectNotificationDependency(
   if (output === "") return { kind: "empty" };
   const completion = readPiExactCommittedOutput(status, run.runId, parentSessionId, parentSessionFile, output, "direct") ??
     (run.status === "completed"
-      ? readPiPinnedDirectPreviewCompletion(entry, run, status, parentSessionId, parentSessionFile, output)
+      ? readPiPinnedDirectPreviewCompletion(run, status, parentSessionId, parentSessionFile, output)
       : null);
   if (!completion) return null;
   return {
@@ -2353,7 +2347,6 @@ function resolvePiDirectNotificationDependency(
  * terminal response remain the identity proof; the preview is only a view.
  */
 function readPiPinnedDirectPreviewCompletion(
-  entry: SessionEntryLike,
   run: PiWorkflowNotificationRun,
   status: PiSubagentStatus,
   parentSessionId: string,
@@ -2578,7 +2571,6 @@ export function derivePiIdentity(
   const nativeHeader = readNativeSessionHeader(session.sessionManager.getSessionFile?.());
   const headerIsBound = nativeHeader?.id === sessionId;
   const nativeParentFile = nativeHeader?.parentSession;
-  const hasNativeParent = Boolean(nativeParentFile);
   const parentSessionId = isForkedRoot ? null : readPiNativeSessionId(nativeParentFile);
   const nativeRootId = isForkedRoot
     ? sessionId
@@ -2728,10 +2720,6 @@ export function readPiForkBoundaryIndex(ctx: ExtensionContext): number | null {
   const branch = entries(session);
   const index = branch.findIndex((entry) => entry.customType === PI_FORK_ROOT_ENTRY && customData(entry)?.sessionId === sessionId);
   return index < 0 ? null : index;
-}
-
-export function isPiForkRoot(ctx: ExtensionContext): boolean {
-  return readPiForkBoundaryIndex(ctx) !== null;
 }
 
 export function makePiCompactionRecord(

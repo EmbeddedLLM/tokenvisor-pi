@@ -79,7 +79,6 @@ import {
   readPiSingleTextContent,
   readLatestPiCompactionContributorWitnesses,
   type PiDependencyDeliveryWitness,
-  isPiForkRoot,
   makePiCompactionRecord,
   makePiLaunchReceiptPendingRecord,
   PI_COMPACTION_ENTRY,
@@ -100,7 +99,6 @@ import {
   latestNativeCompactionId,
   PI_FOREGROUND_DELIVERY_ENTRY,
   PI_LAUNCH_RECEIPT_PENDING_ENTRY,
-  PI_LAUNCH_RECEIPT_CONSUMPTION_ENTRY,
 } from "../src/capture/pi.ts";
 import {
   createOmpEnvelope,
@@ -251,7 +249,6 @@ function observeCaptureResult<T extends { result: () => Promise<{ responseId?: s
   stream: T,
   context: CaptureContext,
   capturePath: string | undefined,
-  runtimeHost: RuntimeHost,
   onTerminal: (streamId: string, responseId: string | null, stopReason: string | undefined, content: unknown, observedResponseId: string | null) => void,
 ): T {
   const originalResult = stream.result.bind(stream);
@@ -1041,12 +1038,6 @@ export default async function (pi: ExtensionAPI) {
         delegation,
         resultDependencies,
       });
-      if (!identity) {
-        if (compactionCaptureActive.has(sessionId)) effects.push(() => compactionStreamFailures.add(sessionId));
-        diagnostic({ session_id: `pi:session:${sessionId}`, status: "metadata_unavailable" });
-        effects.push(() => warnCaptureLimitation(ctx, `pi:session:${sessionId}`, "request-identity", "request identity could not be resolved"));
-        return;
-      }
       const pendingLaunchReceipts = piPendingLaunchReceiptsBySession.get(sessionId) ?? [];
       effects.push(() => {
         const outstanding = [...piLaunchReceiptSessionByStream.values()].filter((owner) => owner === sessionId).length;
@@ -1256,7 +1247,6 @@ export default async function (pi: ExtensionAPI) {
             nativeParentSessionId: lineage?.parentSessionId,
             nativeRootSessionId: lineage?.rootSessionId,
             delegation: lineage?.delegation,
-            isForkedRoot: lineage?.forkedRoot,
             messages: ompMessages,
             nativeSequence: ompNativeSequence,
           },
@@ -1353,7 +1343,7 @@ export default async function (pi: ExtensionAPI) {
         }
       }
       const stream = delegate(streamModel, context, streamOptions);
-      return observeCaptureResult(stream, streamContext, capturePath, runtimeHost!, (streamId, responseId, stopReason, content, observedResponseId) => {
+      return observeCaptureResult(stream, streamContext, capturePath, (streamId, responseId, stopReason, content, observedResponseId) => {
         if (runtimeHost === "omp" && ompSequenceState) {
           recordOmpSequenceResult(ompSequenceState, streamId, observedResponseId, responseId !== null);
         }

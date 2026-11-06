@@ -53,11 +53,9 @@ function isNativeId(value: unknown): value is string {
 
 export interface OmpCaptureContext {
   sessionId?: string;
-  agentId?: string;
   delegation?: MetadataIdentity["delegation"];
   nativeParentSessionId?: string;
   nativeRootSessionId?: string | null;
-  isForkedRoot?: boolean;
   parentSessionId?: string;
   messages?: MessageLike[];
   nativeSequence?: { previousResponseId: string | null; hasPriorHistory: boolean };

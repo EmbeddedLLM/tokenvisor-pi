@@ -17,7 +17,6 @@ import {
 } from "../src/capture/shared.ts";
 import {
   derivePiIdentity,
-  isPiForkRoot,
   makePiCompactionRecord,
   PI_COMPACTION_ENTRY,
   PI_FORK_ROOT_ENTRY,
@@ -494,8 +493,8 @@ describe("shared agent metadata", () => {
     expect(fork?.session.root_id).toBe(`pi:session:${ids.child}`);
     expect(fork?.sequence).toEqual({ status: "start", previous_response_id: null });
     expect(fork?.depends_on).toEqual([]);
-    expect(isPiForkRoot(piContext({ branch: [{ customType: PI_FORK_ROOT_ENTRY, data: { version: 1, sessionId: ids.root } }] }))).toBe(true);
-    expect(isPiForkRoot(piContext({ sessionId: ids.child, branch: [{ customType: PI_FORK_ROOT_ENTRY, data: { version: 1, sessionId: ids.root } }] }))).toBe(false);
+    expect(readPiForkBoundaryIndex(piContext({ branch: [{ customType: PI_FORK_ROOT_ENTRY, data: { version: 1, sessionId: ids.root } }] }))).toBe(0);
+    expect(readPiForkBoundaryIndex(piContext({ sessionId: ids.child, branch: [{ customType: PI_FORK_ROOT_ENTRY, data: { version: 1, sessionId: ids.root } }] }))).toBeNull();
     } finally {
       if (oldRootHint === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
       else process.env.PI_SUBAGENT_PARENT_SESSION = oldRootHint;
@@ -1607,10 +1606,9 @@ describe("shared agent metadata", () => {
     expect(boundary).toBe(copied.length);
     const ownBranch = forkBranch.slice(boundary! + 1);
     expect(pendingOmpCompactionDependencies(ownBranch, refs)).toEqual(refs);
-    expect(deriveOmpIdentity({ sessionId: ids.child, isForkedRoot: true, messages: [] }, []).hasPriorHistory).toBe(false);
+    expect(deriveOmpIdentity({ sessionId: ids.child, messages: [] }, []).hasPriorHistory).toBe(false);
     const later = deriveOmpIdentity({
       sessionId: ids.child,
-      isForkedRoot: true,
       messages: [{ role: "assistant", responseId: "fork-response" }],
     }, refs);
     expect(later?.previousResponseId).toBe("fork-response");

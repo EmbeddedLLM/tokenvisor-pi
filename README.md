@@ -6,7 +6,7 @@ Dynamically discovers models from your TokenVisor account and registers them as 
 
 ## Install
 
-Under pi:
+### Pi
 
 ```bash
 pi install git:github.com/EmbeddedLLM/tokenvisor-pi
@@ -18,7 +18,7 @@ Or add to `.pi/settings.json`:
 { "packages": ["git:github.com/EmbeddedLLM/tokenvisor-pi"] }
 ```
 
-Under omp:
+### OMP
 
 ```bash
 omp plugin install https://github.com/EmbeddedLLM/tokenvisor-pi
@@ -35,6 +35,21 @@ Or add to `~/.omp/plugins/package.json`:
 ```
 
 The `package.json` `pi` manifest is read by both hosts (omp falls back to the `pi` field).
+
+### Update or replace a development installation
+
+After the changes are pushed to GitHub, update an existing GitHub installation with:
+
+```bash
+pi update git:github.com/EmbeddedLLM/tokenvisor-pi
+omp plugin install https://github.com/EmbeddedLLM/tokenvisor-pi
+```
+
+OMP refreshes direct GitHub packages through `plugin install`. Its `plugin upgrade` command handles marketplace installations using a `name@marketplace` ID.
+
+If you installed from a local development path, first remove that registration. Use `pi list` to find the configured source, then run `pi remove <source>`. For a linked OMP installation, run `omp plugin uninstall tokenvisor-pi`. Install again using the GitHub command for each host above. A local path or link continues loading the local checkout until you replace it.
+
+Restart Pi or OMP after installing or updating, then select a TokenVisor model with `/model`. These commands install the TokenVisor provider into your existing Pi/OMP installations.
 
 ## Agent metadata
 
