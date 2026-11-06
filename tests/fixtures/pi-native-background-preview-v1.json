@@ -1,0 +1,39 @@
+{
+  "contract": "pi-subagents-0.83.0-direct-notification-preview",
+  "run_id": "run-preview-1",
+  "parent_session_id": "root-preview",
+  "parent_response_id": "parent-preview",
+  "tool_call_id": "call-preview",
+  "child_session_id": "child-preview",
+  "terminal_response_id": "terminal-preview",
+  "agent": "worker",
+  "normalized_output_shape": {
+    "ascii_prefix_characters": 1790,
+    "first_line_break_after_prefix": true,
+    "unicode_segment": "é🙂",
+    "ascii_suffix_characters": 500,
+    "acceptance_report_removed": true
+  },
+  "expected": {
+    "normalized_utf16_code_units": 2294,
+    "normalized_utf8_bytes": 2297,
+    "inline_preview_head_code_units": 2000,
+    "inline_preview_size_text": "2.2 KB",
+    "inline_preview_line_text": "2 lines",
+    "dependency": {
+      "session_id": "pi:session:child-preview",
+      "response_id": "terminal-preview",
+      "run_id": "run-preview-1"
+    },
+    "unsupported_mutations": [
+      "wrong-run",
+      "wrong-artifact-pointer",
+      "wrong-neighbor-artifact-directory",
+      "wrong-cap-marker",
+      "wrong-artifact-body",
+      "same-prefix-different-terminal",
+      "stale-completion-marker",
+      "modified-effective-input"
+    ]
+  }
+}

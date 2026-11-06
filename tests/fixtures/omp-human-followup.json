@@ -1,0 +1,2393 @@
+{
+  "fixture": "omp-human-followup-v1",
+  "provenance": {
+    "evidence": "Read-only native OMP JSONL plus authorized localhost API detail/trace metadata",
+    "captureWindowUtc": ["2026-10-29T06:47:00Z", "2026-10-29T06:51:00Z"],
+    "sourcePin": {
+      "harness": "omp",
+      "harnessVersion": "18.12.6",
+      "extensionVersion": "1.1.0-dev",
+      "adapterVersion": 1,
+      "runnerVersion": "18.12.6",
+      "nativeSourceCommit": "45c35e40c46166dc726ccc52f5d27f40f2449f99",
+      "separatelyInstalledTaskPackage": "@oh-my-pi/pi-coding-agent@17.3.5 (not the compiled host source)",
+      "nativeSources": [
+        "src/task/types.ts: AgentProgress.agent is the agent/profile string",
+        "src/task/index.ts: progress.agent is set from resolvedAgents[index]; progress.id is the allocated job ID"
+      ]
+    },
+    "identityAliases": {
+      "rootSession": "root",
+      "childSession": "child",
+      "initialJob": "CompulsoryMoose",
+      "followupJob": "CompulsoryMoose-2",
+      "agentUrlId": "CompulsoryMoose",
+      "route": "agent://child"
+    },
+    "privacy": "Native UUIDs and tool call IDs are replaced with fixture aliases. Prompts, task arguments, message bodies, result text, API payloads, auth data, costs, and local file paths are omitted. Empty native content arrays indicate intentionally excluded content. Native branch entry IDs, response IDs, and tool-call IDs use consistent aliases; result payload presence is retained with a redacted sentinel. Native ancestry and entry shapes are preserved. Synthetic qualification payloads below are separate non-human test strings and do not restore omitted historical content."
+  },
+  "nativeFacts": {
+    "taskProgress": {
+      "index": 0,
+      "id": "CompulsoryMoose",
+      "agent": "scout",
+      "agentSource": "bundled",
+      "modelRole": "smol",
+      "status": "pending",
+      "recentTools": [],
+      "recentOutput": [],
+      "toolCount": 0,
+      "requests": 0,
+      "tokens": 0,
+      "durationMs": 0
+    },
+    "waitJobs": [
+      {
+        "id": "CompulsoryMoose",
+        "type": "task",
+        "status": "completed",
+        "label": "CompulsoryMoose",
+        "durationMs": 38622,
+        "resolvedModel": "TokenVisor/Qwen/Qwen3.6-35B-A3B:medium",
+        "resolvedModelIdentity": "TokenVisor/Qwen/Qwen3.6-35B-A3B",
+        "resolvedThinkingLevel": "medium",
+        "widget": {
+          "title": "CompulsoryMoose",
+          "blocks": [
+            {
+              "kind": "stat",
+              "items": [
+                {
+                  "label": "lines",
+                  "text": "3571"
+                },
+                {
+                  "label": "lines/s",
+                  "text": "92.5"
+                }
+              ]
+            }
+          ],
+          "state": "fallback",
+          "updatedAt": 1793256538350
+        },
+        "agentUrlId": "CompulsoryMoose"
+      },
+      {
+        "id": "CompulsoryMoose-2",
+        "type": "task",
+        "status": "completed",
+        "label": "CompulsoryMoose",
+        "durationMs": 19333,
+        "resolvedModel": "TokenVisor/Qwen/Qwen3.6-35B-A3B:medium",
+        "resolvedModelIdentity": "TokenVisor/Qwen/Qwen3.6-35B-A3B",
+        "resolvedThinkingLevel": "medium",
+        "widget": {
+          "title": "CompulsoryMoose",
+          "blocks": [],
+          "state": "fallback",
+          "updatedAt": 1793256571160
+        },
+        "agentUrlId": "CompulsoryMoose"
+      }
+    ]
+  },
+  "completionMarkers": [
+    {
+      "type": "tokenvisor-agent-run-completion-v1",
+      "version": 1,
+      "runId": "omp:task:CompulsoryMoose",
+      "parentSession": "root",
+      "session": "child",
+      "responseId": "child-completion-first",
+      "timestamp": "2026-10-29T06:49:16.651Z"
+    },
+    {
+      "type": "tokenvisor-agent-run-completion-v1",
+      "version": 1,
+      "runId": "omp:task:CompulsoryMoose",
+      "parentSession": "root",
+      "session": "child",
+      "responseId": "child-completion-followup",
+      "timestamp": "2026-10-29T06:49:50.490Z"
+    }
+  ],
+  "syntheticQualification": {
+    "kind": "source-backed-synthetic-payloads",
+    "nativeSourceCommit": "45c35e40c46166dc726ccc52f5d27f40f2449f99",
+    "scope": "The historical snapshots remain redacted and cannot prove result-to-response consumption. These separate safe strings exercise the pinned task-summary formatter and plain wake relay contract only.",
+    "firstTask": {
+      "responseText": "Synthetic task result A",
+      "resultText": "<task-result id=\"CompulsoryMoose\" agent=\"scout\" status=\"completed\" duration=\"1m\">\n<output>\nSynthetic task result A\n</output>\n</task-result>",
+      "responseSha256": "265a20821a15d9abae0a1330d4577be06d0b1e94e8d7f252aa50476c8450d1ee",
+      "resultTextSha256": "9c3a0607de47116a8273d34cc188e94cdd861f2b4370d6b53ffb4f33d2b41a57"
+    },
+    "followupWake": {
+      "responseText": "Synthetic wake result B",
+      "resultText": "Synthetic wake result B",
+      "responseSha256": "40a8482619273ee717882a1ee113635a1f5f789740e32f076d44bc3c1d690409",
+      "resultTextSha256": "40a8482619273ee717882a1ee113635a1f5f789740e32f076d44bc3c1d690409"
+    }
+  },
+  "snapshots": [
+    {
+      "name": "first-wait",
+      "assistantTimestamp": "2026-10-29T06:48:39.025Z",
+      "waitResultTimestamp": "2026-10-29T06:49:16.662Z",
+      "consumerTimestamp": "2026-10-29T06:49:16.678Z",
+      "waitToolCall": {
+        "type": "toolCall",
+        "id": "root-wait-call-1",
+        "name": "wait"
+      },
+      "waitToolResult": {
+        "role": "toolResult",
+        "toolCallId": "root-wait-call-1",
+        "toolName": "wait",
+        "content": [],
+        "details": {
+          "op": "wait",
+          "meta": {
+            "source": {
+              "type": "report",
+              "value": "background jobs snapshot"
+            }
+          },
+          "jobs": [
+            {
+              "id": "CompulsoryMoose",
+              "type": "task",
+              "status": "completed",
+              "label": "CompulsoryMoose",
+              "durationMs": 38622,
+              "resolvedModel": "TokenVisor/Qwen/Qwen3.6-35B-A3B:medium",
+              "resolvedModelIdentity": "TokenVisor/Qwen/Qwen3.6-35B-A3B",
+              "resolvedThinkingLevel": "medium",
+              "widget": {
+                "title": "CompulsoryMoose",
+                "blocks": [
+                  {
+                    "kind": "stat",
+                    "items": [
+                      {
+                        "label": "lines",
+                        "text": "3571"
+                      },
+                      {
+                        "label": "lines/s",
+                        "text": "92.5"
+                      }
+                    ]
+                  }
+                ],
+                "state": "fallback",
+                "updatedAt": 1793256538350
+              },
+              "agentUrlId": "CompulsoryMoose"
+            }
+          ]
+        },
+        "isError": false,
+        "timestamp": 1793256556662
+      },
+      "parentConsumer": {
+        "type": "message",
+        "role": "assistant",
+        "responseId": "parent-consumer-first",
+        "stopReason": "stop",
+        "timestamp": 1793256556678
+      },
+      "availableCompletionResponseIds": ["child-completion-first"],
+      "candidateCompletion": {
+        "runId": "omp:task:CompulsoryMoose",
+        "session": "child",
+        "responseId": "child-completion-first"
+      },
+      "nativeBranch": [
+        {
+          "type": "model_change",
+          "id": "parent-entry-1"
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "parent-entry-2",
+          "parentId": "parent-entry-1"
+        },
+        {
+          "type": "model_change",
+          "id": "parent-entry-3",
+          "parentId": "parent-entry-2"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-4",
+          "parentId": "parent-entry-3",
+          "message": {
+            "role": "user",
+            "content": []
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-5",
+          "parentId": "parent-entry-4",
+          "customType": "system-prompt-digest"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-6",
+          "parentId": "parent-entry-5",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-1",
+                "name": "glob"
+              }
+            ],
+            "responseId": "parent-response-1",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-7",
+          "parentId": "parent-entry-6",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-8",
+          "parentId": "parent-entry-7",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-1",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-9",
+          "parentId": "parent-entry-8",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-2",
+                "name": "read"
+              }
+            ],
+            "responseId": "parent-response-2",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-10",
+          "parentId": "parent-entry-9",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-11",
+          "parentId": "parent-entry-10",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-2",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "title_change",
+          "id": "parent-entry-12",
+          "parentId": "parent-entry-11"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-13",
+          "parentId": "parent-entry-12",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-3",
+                "name": "task"
+              }
+            ],
+            "responseId": "parent-response-3",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-14",
+          "parentId": "parent-entry-13",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-15",
+          "parentId": "parent-entry-14",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-3",
+            "toolName": "task",
+            "details": {
+              "progress": [
+                {
+                  "id": "CompulsoryMoose",
+                  "agent": "scout"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-16",
+          "parentId": "parent-entry-15",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-4",
+                "name": "wait"
+              }
+            ],
+            "responseId": "parent-response-4",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-17",
+          "parentId": "parent-entry-16",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-18",
+          "parentId": "parent-entry-17",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-4",
+            "toolName": "wait",
+            "details": {
+              "op": "wait",
+              "jobs": [
+                {
+                  "id": "CompulsoryMoose",
+                  "type": "task",
+                  "status": "completed",
+                  "agentUrlId": "CompulsoryMoose",
+                  "resultText": "[redacted native result]"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "nativeConsumerEntry": {
+        "type": "message",
+        "id": "parent-entry-19",
+        "parentId": "parent-entry-18",
+        "message": {
+          "role": "assistant",
+          "content": [],
+          "responseId": "parent-consumer-first",
+          "stopReason": "stop"
+        }
+      },
+      "nativeChildFilePrefix": [
+        {
+          "type": "title"
+        },
+        {
+          "type": "session",
+          "id": "child",
+          "parentSession": "__PARENT_SESSION_FILE__"
+        },
+        {
+          "type": "model_change",
+          "id": "child-entry-1"
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "child-entry-2",
+          "parentId": "child-entry-1"
+        },
+        {
+          "type": "session_init",
+          "id": "child-entry-3",
+          "parentId": "child-entry-2"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-4",
+          "parentId": "child-entry-3",
+          "message": {
+            "role": "user",
+            "content": []
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-5",
+          "parentId": "child-entry-4",
+          "customType": "system-prompt-digest"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-6",
+          "parentId": "child-entry-5",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-7",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-8",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-9",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-10",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-11",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-12",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-13",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-14",
+                "name": "glob"
+              }
+            ],
+            "responseId": "child-response-1",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-7",
+          "parentId": "child-entry-6",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-8",
+          "parentId": "child-entry-7",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-9",
+          "parentId": "child-entry-8",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-10",
+          "parentId": "child-entry-9",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-11",
+          "parentId": "child-entry-10",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-12",
+          "parentId": "child-entry-11",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-13",
+          "parentId": "child-entry-12",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-14",
+          "parentId": "child-entry-13",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-15",
+          "parentId": "child-entry-14",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-7",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-16",
+          "parentId": "child-entry-15",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-8",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-17",
+          "parentId": "child-entry-16",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-9",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-18",
+          "parentId": "child-entry-17",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-10",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-19",
+          "parentId": "child-entry-18",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-11",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-20",
+          "parentId": "child-entry-19",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-12",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-21",
+          "parentId": "child-entry-20",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-13",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-22",
+          "parentId": "child-entry-21",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-14",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-23",
+          "parentId": "child-entry-22",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-15",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-16",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-17",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-18",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-19",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-20",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-21",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-22",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-2",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-24",
+          "parentId": "child-entry-23",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-25",
+          "parentId": "child-entry-24",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-26",
+          "parentId": "child-entry-25",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-27",
+          "parentId": "child-entry-26",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-28",
+          "parentId": "child-entry-27",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-29",
+          "parentId": "child-entry-28",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-30",
+          "parentId": "child-entry-29",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-31",
+          "parentId": "child-entry-30",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-32",
+          "parentId": "child-entry-31",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-15",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-33",
+          "parentId": "child-entry-32",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-16",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-34",
+          "parentId": "child-entry-33",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-17",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-35",
+          "parentId": "child-entry-34",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-18",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-36",
+          "parentId": "child-entry-35",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-19",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-37",
+          "parentId": "child-entry-36",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-20",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-38",
+          "parentId": "child-entry-37",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-21",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-39",
+          "parentId": "child-entry-38",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-22",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-40",
+          "parentId": "child-entry-39",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-23",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-24",
+                "name": "glob"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-25",
+                "name": "glob"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-26",
+                "name": "glob"
+              }
+            ],
+            "responseId": "child-response-3",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-41",
+          "parentId": "child-entry-40",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-42",
+          "parentId": "child-entry-41",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-43",
+          "parentId": "child-entry-42",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-44",
+          "parentId": "child-entry-43",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-45",
+          "parentId": "child-entry-44",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-23",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-46",
+          "parentId": "child-entry-45",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-24",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-47",
+          "parentId": "child-entry-46",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-25",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-48",
+          "parentId": "child-entry-47",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-26",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-49",
+          "parentId": "child-entry-48",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-27",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-28",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-29",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-30",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-4",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-50",
+          "parentId": "child-entry-49",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-51",
+          "parentId": "child-entry-50",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-52",
+          "parentId": "child-entry-51",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-53",
+          "parentId": "child-entry-52",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-54",
+          "parentId": "child-entry-53",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-27",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-55",
+          "parentId": "child-entry-54",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-28",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-56",
+          "parentId": "child-entry-55",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-29",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-57",
+          "parentId": "child-entry-56",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-30",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-58",
+          "parentId": "child-entry-57",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-31",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-32",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-5",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-59",
+          "parentId": "child-entry-58",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-60",
+          "parentId": "child-entry-59",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-61",
+          "parentId": "child-entry-60",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-31",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-62",
+          "parentId": "child-entry-61",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-32",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-63",
+          "parentId": "child-entry-62",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-33",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-6",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-64",
+          "parentId": "child-entry-63",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-65",
+          "parentId": "child-entry-64",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-33",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-66",
+          "parentId": "child-entry-65",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-34",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-35",
+                "name": "glob"
+              }
+            ],
+            "responseId": "child-response-7",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-67",
+          "parentId": "child-entry-66",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-68",
+          "parentId": "child-entry-67",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-69",
+          "parentId": "child-entry-68",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-34",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-70",
+          "parentId": "child-entry-69",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-35",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-71",
+          "parentId": "child-entry-70",
+          "message": {
+            "role": "assistant",
+            "content": [],
+            "responseId": "child-completion-first",
+            "stopReason": "stop"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-72",
+          "parentId": "child-entry-71",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "omp:task:CompulsoryMoose",
+            "parentSessionId": "root",
+            "sessionId": "child",
+            "responseId": "child-completion-first"
+          }
+        }
+      ]
+    },
+    {
+      "name": "followup-wait",
+      "assistantTimestamp": "2026-10-29T06:49:33.209Z",
+      "waitResultTimestamp": "2026-10-29T06:49:50.494Z",
+      "consumerTimestamp": "2026-10-29T06:49:50.506Z",
+      "waitToolCall": {
+        "type": "toolCall",
+        "id": "root-wait-call-2",
+        "name": "wait"
+      },
+      "waitToolResult": {
+        "role": "toolResult",
+        "toolCallId": "root-wait-call-2",
+        "toolName": "wait",
+        "content": [],
+        "details": {
+          "op": "wait",
+          "meta": {
+            "source": {
+              "type": "report",
+              "value": "background jobs snapshot"
+            }
+          },
+          "jobs": [
+            {
+              "id": "CompulsoryMoose-2",
+              "type": "task",
+              "status": "completed",
+              "label": "CompulsoryMoose",
+              "durationMs": 19333,
+              "resolvedModel": "TokenVisor/Qwen/Qwen3.6-35B-A3B:medium",
+              "resolvedModelIdentity": "TokenVisor/Qwen/Qwen3.6-35B-A3B",
+              "resolvedThinkingLevel": "medium",
+              "widget": {
+                "title": "CompulsoryMoose",
+                "blocks": [],
+                "state": "fallback",
+                "updatedAt": 1793256571160
+              },
+              "agentUrlId": "CompulsoryMoose"
+            }
+          ]
+        },
+        "isError": false,
+        "timestamp": 1793256590494
+      },
+      "parentConsumer": {
+        "type": "message",
+        "role": "assistant",
+        "responseId": "parent-consumer-followup",
+        "stopReason": "stop",
+        "timestamp": 1793256590506
+      },
+      "availableCompletionResponseIds": [
+        "child-completion-first",
+        "child-completion-followup"
+      ],
+      "candidateCompletion": {
+        "runId": "omp:task:CompulsoryMoose",
+        "session": "child",
+        "responseId": "child-completion-followup"
+      },
+      "nativeBranch": [
+        {
+          "type": "model_change",
+          "id": "parent-entry-1"
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "parent-entry-2",
+          "parentId": "parent-entry-1"
+        },
+        {
+          "type": "model_change",
+          "id": "parent-entry-3",
+          "parentId": "parent-entry-2"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-4",
+          "parentId": "parent-entry-3",
+          "message": {
+            "role": "user",
+            "content": []
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-5",
+          "parentId": "parent-entry-4",
+          "customType": "system-prompt-digest"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-6",
+          "parentId": "parent-entry-5",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-1",
+                "name": "glob"
+              }
+            ],
+            "responseId": "parent-response-1",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-7",
+          "parentId": "parent-entry-6",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-8",
+          "parentId": "parent-entry-7",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-1",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-9",
+          "parentId": "parent-entry-8",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-2",
+                "name": "read"
+              }
+            ],
+            "responseId": "parent-response-2",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-10",
+          "parentId": "parent-entry-9",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-11",
+          "parentId": "parent-entry-10",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-2",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "title_change",
+          "id": "parent-entry-12",
+          "parentId": "parent-entry-11"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-13",
+          "parentId": "parent-entry-12",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-3",
+                "name": "task"
+              }
+            ],
+            "responseId": "parent-response-3",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-14",
+          "parentId": "parent-entry-13",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-15",
+          "parentId": "parent-entry-14",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-3",
+            "toolName": "task",
+            "details": {
+              "progress": [
+                {
+                  "id": "CompulsoryMoose",
+                  "agent": "scout"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-16",
+          "parentId": "parent-entry-15",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-4",
+                "name": "wait"
+              }
+            ],
+            "responseId": "parent-response-4",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-17",
+          "parentId": "parent-entry-16",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-18",
+          "parentId": "parent-entry-17",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-4",
+            "toolName": "wait",
+            "details": {
+              "op": "wait",
+              "jobs": [
+                {
+                  "id": "CompulsoryMoose",
+                  "type": "task",
+                  "status": "completed",
+                  "agentUrlId": "CompulsoryMoose",
+                  "resultText": "[redacted native result]"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-19",
+          "parentId": "parent-entry-18",
+          "message": {
+            "role": "assistant",
+            "content": [],
+            "responseId": "parent-consumer-first",
+            "stopReason": "stop"
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-20",
+          "parentId": "parent-entry-19",
+          "message": {
+            "role": "user",
+            "content": []
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-21",
+          "parentId": "parent-entry-20",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-5",
+                "name": "write"
+              }
+            ],
+            "responseId": "parent-response-5",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-22",
+          "parentId": "parent-entry-21",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-23",
+          "parentId": "parent-entry-22",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-5",
+            "toolName": "write"
+          }
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-24",
+          "parentId": "parent-entry-23",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-6",
+                "name": "wait"
+              }
+            ],
+            "responseId": "parent-response-6",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "parent-entry-25",
+          "parentId": "parent-entry-24",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "parent-entry-26",
+          "parentId": "parent-entry-25",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-6",
+            "toolName": "wait",
+            "details": {
+              "op": "wait",
+              "jobs": [
+                {
+                  "id": "CompulsoryMoose-2",
+                  "type": "task",
+                  "status": "completed",
+                  "agentUrlId": "CompulsoryMoose",
+                  "resultText": "[redacted native result]"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "nativeConsumerEntry": {
+        "type": "message",
+        "id": "parent-entry-27",
+        "parentId": "parent-entry-26",
+        "message": {
+          "role": "assistant",
+          "content": [],
+          "responseId": "parent-consumer-followup",
+          "stopReason": "stop"
+        }
+      },
+      "nativeChildFilePrefix": [
+        {
+          "type": "title"
+        },
+        {
+          "type": "session",
+          "id": "child",
+          "parentSession": "__PARENT_SESSION_FILE__"
+        },
+        {
+          "type": "model_change",
+          "id": "child-entry-1"
+        },
+        {
+          "type": "thinking_level_change",
+          "id": "child-entry-2",
+          "parentId": "child-entry-1"
+        },
+        {
+          "type": "session_init",
+          "id": "child-entry-3",
+          "parentId": "child-entry-2"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-4",
+          "parentId": "child-entry-3",
+          "message": {
+            "role": "user",
+            "content": []
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-5",
+          "parentId": "child-entry-4",
+          "customType": "system-prompt-digest"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-6",
+          "parentId": "child-entry-5",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-7",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-8",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-9",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-10",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-11",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-12",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-13",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-14",
+                "name": "glob"
+              }
+            ],
+            "responseId": "child-response-1",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-7",
+          "parentId": "child-entry-6",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-8",
+          "parentId": "child-entry-7",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-9",
+          "parentId": "child-entry-8",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-10",
+          "parentId": "child-entry-9",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-11",
+          "parentId": "child-entry-10",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-12",
+          "parentId": "child-entry-11",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-13",
+          "parentId": "child-entry-12",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-14",
+          "parentId": "child-entry-13",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-15",
+          "parentId": "child-entry-14",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-7",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-16",
+          "parentId": "child-entry-15",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-8",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-17",
+          "parentId": "child-entry-16",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-9",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-18",
+          "parentId": "child-entry-17",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-10",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-19",
+          "parentId": "child-entry-18",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-11",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-20",
+          "parentId": "child-entry-19",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-12",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-21",
+          "parentId": "child-entry-20",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-13",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-22",
+          "parentId": "child-entry-21",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-14",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-23",
+          "parentId": "child-entry-22",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-15",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-16",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-17",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-18",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-19",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-20",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-21",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-22",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-2",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-24",
+          "parentId": "child-entry-23",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-25",
+          "parentId": "child-entry-24",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-26",
+          "parentId": "child-entry-25",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-27",
+          "parentId": "child-entry-26",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-28",
+          "parentId": "child-entry-27",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-29",
+          "parentId": "child-entry-28",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-30",
+          "parentId": "child-entry-29",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-31",
+          "parentId": "child-entry-30",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-32",
+          "parentId": "child-entry-31",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-15",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-33",
+          "parentId": "child-entry-32",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-16",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-34",
+          "parentId": "child-entry-33",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-17",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-35",
+          "parentId": "child-entry-34",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-18",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-36",
+          "parentId": "child-entry-35",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-19",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-37",
+          "parentId": "child-entry-36",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-20",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-38",
+          "parentId": "child-entry-37",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-21",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-39",
+          "parentId": "child-entry-38",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-22",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-40",
+          "parentId": "child-entry-39",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-23",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-24",
+                "name": "glob"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-25",
+                "name": "glob"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-26",
+                "name": "glob"
+              }
+            ],
+            "responseId": "child-response-3",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-41",
+          "parentId": "child-entry-40",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-42",
+          "parentId": "child-entry-41",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-43",
+          "parentId": "child-entry-42",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-44",
+          "parentId": "child-entry-43",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-45",
+          "parentId": "child-entry-44",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-23",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-46",
+          "parentId": "child-entry-45",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-24",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-47",
+          "parentId": "child-entry-46",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-25",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-48",
+          "parentId": "child-entry-47",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-26",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-49",
+          "parentId": "child-entry-48",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-27",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-28",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-29",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-30",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-4",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-50",
+          "parentId": "child-entry-49",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-51",
+          "parentId": "child-entry-50",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-52",
+          "parentId": "child-entry-51",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-53",
+          "parentId": "child-entry-52",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-54",
+          "parentId": "child-entry-53",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-27",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-55",
+          "parentId": "child-entry-54",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-28",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-56",
+          "parentId": "child-entry-55",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-29",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-57",
+          "parentId": "child-entry-56",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-30",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-58",
+          "parentId": "child-entry-57",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-31",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-32",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-5",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-59",
+          "parentId": "child-entry-58",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-60",
+          "parentId": "child-entry-59",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-61",
+          "parentId": "child-entry-60",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-31",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-62",
+          "parentId": "child-entry-61",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-32",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-63",
+          "parentId": "child-entry-62",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-33",
+                "name": "read"
+              }
+            ],
+            "responseId": "child-response-6",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-64",
+          "parentId": "child-entry-63",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-65",
+          "parentId": "child-entry-64",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-33",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-66",
+          "parentId": "child-entry-65",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-34",
+                "name": "read"
+              },
+              {
+                "type": "toolCall",
+                "id": "native-tool-call-35",
+                "name": "glob"
+              }
+            ],
+            "responseId": "child-response-7",
+            "stopReason": "toolUse"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-67",
+          "parentId": "child-entry-66",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-68",
+          "parentId": "child-entry-67",
+          "customType": "tool_execution_start"
+        },
+        {
+          "type": "message",
+          "id": "child-entry-69",
+          "parentId": "child-entry-68",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-34",
+            "toolName": "read"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-70",
+          "parentId": "child-entry-69",
+          "message": {
+            "role": "toolResult",
+            "content": [],
+            "toolCallId": "native-tool-call-35",
+            "toolName": "glob"
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-71",
+          "parentId": "child-entry-70",
+          "message": {
+            "role": "assistant",
+            "content": [],
+            "responseId": "child-completion-first",
+            "stopReason": "stop"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-72",
+          "parentId": "child-entry-71",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "omp:task:CompulsoryMoose",
+            "parentSessionId": "root",
+            "sessionId": "child",
+            "responseId": "child-completion-first"
+          }
+        },
+        {
+          "type": "custom_message",
+          "id": "child-entry-73",
+          "parentId": "child-entry-72",
+          "customType": "irc:incoming",
+          "details": {
+            "id": "incoming-followup",
+            "fromParent": true
+          }
+        },
+        {
+          "type": "message",
+          "id": "child-entry-74",
+          "parentId": "child-entry-73",
+          "message": {
+            "role": "assistant",
+            "content": [],
+            "responseId": "child-completion-followup",
+            "stopReason": "stop"
+          }
+        },
+        {
+          "type": "custom",
+          "id": "child-entry-75",
+          "parentId": "child-entry-74",
+          "customType": "tokenvisor-agent-run-completion-v1",
+          "data": {
+            "version": 1,
+            "runId": "omp:task:CompulsoryMoose",
+            "parentSessionId": "root",
+            "sessionId": "child",
+            "responseId": "child-completion-followup"
+          }
+        }
+      ]
+    }
+  ],
+  "oracle": {
+    "initialProgressAgent": "scout",
+    "nativeJobType": "task",
+    "followupReusesAgentUrlId": true,
+    "firstSnapshotHasOnlyFirstMarker": true,
+    "secondSnapshotHasBothMarkers": true,
+    "parentConsumersAreDistinct": true,
+    "completionMarkerResponseIds": [
+      "child-completion-first",
+      "child-completion-followup"
+    ]
+  }
+}

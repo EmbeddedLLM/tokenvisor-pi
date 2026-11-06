@@ -1,0 +1,157 @@
+{
+  "schema": "./agent-metadata-v1.schema.json",
+  "version": 1,
+  "fixtures": [
+    {
+      "name": "pi-root-start",
+      "metadata": {
+        "version": 1,
+        "source": {
+          "harness": "pi",
+          "harness_version": "1.4.0",
+          "extension_version": "1.1.0-dev",
+          "adapter_version": 1
+        },
+        "session": {
+          "id": "pi:session:pi-root-001",
+          "root_id": "pi:session:pi-root-001",
+          "parent_id": null
+        },
+        "stream_id": "00000000-0000-4000-8000-000000000001",
+        "sequence": {
+          "status": "start",
+          "previous_response_id": null
+        },
+        "delegation": null,
+        "depends_on": [],
+        "child_launches": [
+          {
+            "parent_response_id": "mock-parent-response-001",
+            "tool_call_id": "call-pi-001",
+            "child_session_id": "pi:session:pi-child-001",
+            "run_id": "pi-run-001",
+            "last_response_id": "mock-child-terminal-001"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pi-detached-child-first-stream",
+      "metadata": {
+        "version": 1,
+        "source": {
+          "harness": "pi",
+          "harness_version": "1.4.0",
+          "extension_version": "1.1.0-dev",
+          "adapter_version": 1,
+          "runner_version": "0.83.0"
+        },
+        "session": {
+          "id": "pi:session:pi-child-001",
+          "root_id": "pi:session:pi-root-001",
+          "parent_id": "pi:session:pi-root-001"
+        },
+        "stream_id": "00000000-0000-4000-8000-000000000002",
+        "sequence": {
+          "status": "start",
+          "previous_response_id": null
+        },
+        "delegation": {
+          "run_id": "pi-run-001",
+          "tool_call_id": "call-pi-001"
+        },
+        "depends_on": [],
+        "child_launches": []
+      }
+    },
+    {
+      "name": "omp-parent-after-task-wait",
+      "metadata": {
+        "version": 1,
+        "source": {
+          "harness": "omp",
+          "harness_version": "18.12.6",
+          "extension_version": "1.1.0-dev",
+          "adapter_version": 1,
+          "runner_version": "18.12.6"
+        },
+        "session": {
+          "id": "omp:session:omp-parent-001",
+          "root_id": "omp:session:omp-parent-001",
+          "parent_id": null
+        },
+        "stream_id": "00000000-0000-4000-8000-000000000003",
+        "sequence": {
+          "status": "linked",
+          "previous_response_id": "mock-parent-previous"
+        },
+        "delegation": null,
+        "depends_on": [
+          {
+            "session_id": "omp:session:omp-child-001",
+            "response_id": "mock-child-terminal",
+            "run_id": "omp:task:TaskA"
+          }
+        ],
+        "child_launches": []
+      }
+    },
+    {
+      "name": "pi-partial-unknown-dependencies",
+      "metadata": {
+        "version": 1,
+        "source": {
+          "harness": "pi",
+          "harness_version": "1.4.0",
+          "extension_version": "1.1.0-dev",
+          "adapter_version": 1
+        },
+        "session": {
+          "id": "pi:session:pi-root-001",
+          "root_id": "pi:session:pi-root-001",
+          "parent_id": null
+        },
+        "stream_id": "00000000-0000-4000-8000-000000000004",
+        "sequence": {
+          "status": "unavailable",
+          "previous_response_id": null
+        },
+        "delegation": null,
+        "depends_on": null,
+        "child_launches": []
+      }
+    },
+    {
+      "name": "future-harness-dual-reference",
+      "metadata": {
+        "version": 1,
+        "source": {
+          "harness": "future-gateway",
+          "harness_version": "3.2.1",
+          "extension_version": "1.1.0-dev",
+          "adapter_version": 1
+        },
+        "session": {
+          "id": "future-gateway:session:future-session-001",
+          "root_id": "future-gateway:session:future-session-001",
+          "parent_id": null
+        },
+        "stream_id": "00000000-0000-4000-8000-000000000005",
+        "sequence": {
+          "status": "linked",
+          "previous_response_id": "future-response-001"
+        },
+        "delegation": null,
+        "depends_on": [
+          {
+            "session_id": "future-gateway:session:future-child-001",
+            "response_id": "future-response-002",
+            "stream_id": "00000000-0000-4000-8000-000000000006",
+            "run_id": "future-run-001"
+          }
+        ],
+        "child_launches": []
+      }
+    }
+  ]
+}
