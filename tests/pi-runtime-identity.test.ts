@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { loadPiCompactionRenderer, loadPiRequiredExtensionsApi } from "../src/capture/pi-runtime.ts";
-import { PI_RUN_COMPLETION_ENTRY, readPiRunCompletion, readPiUnconsumedRunDependencies } from "../src/capture/pi.ts";
+import { PI_RUN_COMPLETION_ENTRY, readPiParentToolCallId, readPiRunCompletion, readPiUnconsumedRunDependencies } from "../src/capture/pi.ts";
 
 const roots: string[] = [];
 const savedEnv = { ...process.env };
@@ -20,6 +20,63 @@ function tempRoot() {
 }
 
 describe("Pi runtime identity", () => {
+  test("keeps preferred early binding through status observations before the launch result exists", () => {
+    const f = completionFixture();
+    const branch = delegationEntries(f.runId);
+    branch.splice(1, 1);
+    branch.push(
+      { type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "subagent", id: "status-call", arguments: { action: "status", id: f.runId } }] } },
+      { type: "message", message: { role: "toolResult", toolCallId: "status-call", details: { runId: f.runId, toolCallId: "tool-call" } } },
+    );
+    f.writeParent(branch);
+    expect(readPiParentToolCallId(f.parentFile, "parent-identity", f.runId, "tool-call")).toBe("tool-call");
+    expect(readPiParentToolCallId(f.parentFile, "parent-identity", f.runId)).toBeNull();
+    expect(f.read(branch)?.responseId).toBe(f.responseId);
+  });
+
+  test("binds a resume launch to its own new run rather than treating every action as inspection", () => {
+    const f = completionFixture();
+    const branch = delegationEntries(f.runId, "resume");
+    f.writeParent(branch);
+    expect(readPiParentToolCallId(f.parentFile, "parent-identity", f.runId)).toBe("tool-call");
+    expect(f.read(branch)?.responseId).toBe(f.responseId);
+  });
+
+  test.each([
+    "second-launch", "resume-same-run", "unknown-action", "duplicate-call",
+    "duplicate-result", "unmatched-status-result", "duplicate-status-call", "preferred-mismatch",
+  ])("rejects conflicting delegation evidence through disk and branch readers: %s", (scenario) => {
+    const f = completionFixture();
+    const branch = delegationEntries(f.runId);
+    f.writeParent(branch);
+    expect(readPiParentToolCallId(f.parentFile, "parent-identity", f.runId, "tool-call")).toBe("tool-call");
+    expect(f.read(branch)?.responseId).toBe(f.responseId);
+    let preferred = "tool-call";
+    if (scenario === "duplicate-call") {
+      branch.push(structuredClone(branch[0]));
+    } else if (scenario === "duplicate-result") {
+      branch.push(structuredClone(branch[1]));
+    } else if (scenario === "preferred-mismatch") {
+      preferred = "other-call";
+      f.writeStatus({ toolCallId: preferred });
+    } else {
+      const action = scenario === "resume-same-run" ? "resume"
+        : scenario === "unknown-action" ? "future-inspection"
+        : scenario.includes("status") ? "status" : undefined;
+      const otherCall = { type: "message", message: { role: "assistant", content: [{
+        type: "toolCall", name: "subagent", id: "other-call", arguments: action ? { action, id: f.runId } : { agent: "worker" },
+      }] } };
+      if (scenario !== "unmatched-status-result") branch.push(otherCall);
+      if (scenario === "duplicate-status-call") branch.push(structuredClone(otherCall));
+      branch.push({ type: "message", message: {
+        role: "toolResult", toolCallId: "other-call", details: { runId: f.runId, toolCallId: "tool-call" },
+      } });
+    }
+    f.writeParent(branch);
+    expect(readPiParentToolCallId(f.parentFile, "parent-identity", f.runId, preferred)).toBeNull();
+    expect(f.read(branch)).toBeNull();
+  });
+
   test("finds the owning package manifest above a deeply nested public export", async () => {
     const root = tempRoot();
     const agentDir = join(root, "agent");
@@ -179,16 +236,19 @@ function completionFixture() {
     status = {
       lifecycleArtifactVersion: 3, runId, sessionId: parentFile, toolCallId: "tool-call",
       mode: "single", state: "complete", sessionFile: childFile,
+      steps: [{ sessionFile: childFile }],
       ...overrides,
     };
     writeFileSync(statusFile, JSON.stringify(status));
   };
   writeStatus();
   return {
-    root, childFile, runId, childId, responseId, writeChild, writeStatus,
-    read: () => readPiRunCompletion(runId, parentId, "tool-call", parentFile, [{
+    root, parentFile, childFile, runId, childId, responseId, writeChild, writeStatus,
+    writeParent: (branch: any[]) => writeFileSync(parentFile,
+      [{ type: "session", id: parentId }, ...branch].map((entry) => JSON.stringify(entry)).join("\n") + "\n"),
+    read: (branch: any[] = [{
       type: "message", message: { role: "assistant", content: [{ type: "toolCall", name: "subagent", id: "tool-call" }] },
-    }]),
+    }]) => readPiRunCompletion(runId, parentId, "tool-call", parentFile, branch),
     readDependencies: (output = "Completion output") => {
       const asyncDir = join(root, "async-subagent-runs", runId);
       const branch = [
@@ -205,4 +265,13 @@ function completionFixture() {
       } } as any);
     },
   };
+}
+
+function delegationEntries(runId: string, action?: string): any[] {
+  return [
+    { type: "message", message: { role: "assistant", content: [{
+      type: "toolCall", name: "subagent", id: "tool-call", arguments: action ? { action, id: "previous-run" } : { agent: "worker", async: true },
+    }] } },
+    { type: "message", message: { role: "toolResult", toolCallId: "tool-call", details: { runId, toolCallId: "tool-call" } } },
+  ];
 }
