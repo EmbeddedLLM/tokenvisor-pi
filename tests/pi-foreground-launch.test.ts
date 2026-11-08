@@ -8,6 +8,7 @@ import { parseAgentMetadata } from "../src/capture/shared.ts";
 import {
   makePiCompactionRecord,
   PI_COMPACTION_ENTRY,
+  PI_RUN_COMPLETION_ENTRY,
   PI_RESULT_CONSUMPTION_ENTRY,
   readPiForegroundLaunchEvidence,
   readPiPendingChildLaunchReceipts,
@@ -121,8 +122,9 @@ async function dispatchPiMetadata(
   headers: Headers,
   messages: any[],
   responseId: string,
+  stopReason = "stop",
 ) {
-  (globalThis as any).__PI_TEST_STREAM_RESULT__ = { responseId, stopReason: "stop", content: [] };
+  (globalThis as any).__PI_TEST_STREAM_RESULT__ = { responseId, stopReason, content: [] };
 
   await harness.providerConfig.streamSimple(
     { id: "synthetic", api: "openai-completions", headers },
@@ -134,6 +136,131 @@ async function dispatchPiMetadata(
 }
 
 describe("Pi foreground launch receipts", () => {
+  test("keeps a detached child's launch through status queries, completion, and parent consumption", async () => {
+    const h = await createHarness();
+    const parentId = "status-query-parent";
+    const childId = "status-query-child";
+    const runId = "status-query-run";
+    const launchId = "launch-worker";
+    const parentFile = join(h.root, "parent.jsonl");
+    const childFile = join(h.root, "child.jsonl");
+    const asyncDir = join(h.root, "async-subagent-runs", runId);
+    const parentHeader = { type: "session", id: parentId };
+    const childHeader = { type: "session", id: childId, parentSession: parentFile };
+    const parentBranch: any[] = [
+      { type: "message", id: "launch-entry", message: {
+        role: "assistant", responseId: "launch-response", stopReason: "toolUse",
+        content: [{ type: "toolCall", name: "subagent", id: launchId, arguments: { agent: "worker", async: true } }],
+      } },
+      { type: "message", id: "launch-result", message: {
+        role: "toolResult", toolName: "subagent", toolCallId: launchId, isError: false,
+        content: [{ type: "text", text: "Detached worker started" }],
+        details: { mode: "single", runId, toolCallId: launchId, results: [] },
+      } },
+    ];
+    const childBranch: any[] = [
+      { type: "message", id: "child-user", message: { role: "user", content: [{ type: "text", text: "Read two files" }] } },
+    ];
+    for (const [id, file, header, branch] of [
+      [parentId, parentFile, parentHeader, parentBranch],
+      [childId, childFile, childHeader, childBranch],
+    ] as const) {
+      h.files.set(id, file);
+      h.headers.set(id, header);
+      h.branches.set(id, branch);
+      writeSession(file, header, branch);
+    }
+    mkdirSync(asyncDir, { recursive: true });
+    process.env.PI_SUBAGENTS_TEMP_ROOT = h.root;
+    const writeStatus = (state: string) => writeFileSync(join(asyncDir, "status.json"), JSON.stringify({
+      lifecycleArtifactVersion: 3, runId, toolCallId: launchId, sessionId: parentFile,
+      pid: process.pid, state, mode: "single", sessionFile: childFile,
+      steps: [{ sessionFile: childFile, agent: "worker", exitCode: state === "complete" ? 0 : undefined }],
+    }));
+    const inspectRun = (index: number, action = "status") => {
+      const callId = `inspect-${index}`;
+      parentBranch.push(
+        { type: "message", id: `inspect-call-${index}`, message: {
+          role: "assistant", responseId: `inspect-response-${index}`, stopReason: "toolUse",
+          content: [{ type: "toolCall", name: "subagent", id: callId, arguments: { action, id: runId } }],
+        } },
+        { type: "message", id: `inspect-result-${index}`, message: {
+          role: "toolResult", toolName: "subagent", toolCallId: callId, isError: false,
+          content: [{ type: "text", text: "State: running" }],
+          details: { mode: "single", runId, toolCallId: launchId, results: [] },
+        } },
+      );
+      writeSession(parentFile, parentHeader, parentBranch);
+    };
+    writeStatus("running");
+    inspectRun(1);
+    process.env.PI_SUBAGENT_CHILD = "1";
+    process.env.PI_SUBAGENT_RUNNER_PID = String(process.pid);
+    process.env.PI_SUBAGENT_PARENT_SESSION = parentId;
+    process.argv = [process.execPath,
+      join(h.root, "npm", "node_modules", "pi-subagents", "src", "runs", "background", "subagent-runner-bootstrap.js"),
+      join(h.root, `async-cfg-${runId}.json`),
+    ];
+    const childContext = h.sessionContext(childId);
+    h.appendFor(childId);
+    h.hooks.get("session_start")!({ reason: "startup" }, childContext);
+    const captureChild = async (responseId: string, stopReason: string) => {
+      const headers = new Headers();
+      h.hooks.get("before_provider_headers")!({ headers }, childContext);
+      return dispatchPiMetadata(h, headers, childBranch.map((entry) => entry.message).filter(Boolean), responseId, stopReason);
+    };
+    const first = await captureChild("child-first-response", "toolUse");
+    expect(first?.delegation).toEqual({ run_id: runId, tool_call_id: launchId });
+    expect(first?.sequence).toEqual({ status: "start", previous_response_id: null });
+    childBranch.push({ type: "message", id: "child-first", message: {
+      role: "assistant", responseId: "child-first-response", stopReason: "toolUse", content: [],
+    } });
+    writeSession(childFile, childHeader, childBranch);
+    inspectRun(2);
+    inspectRun(3, "debug.run");
+    const last = await captureChild("child-final-response", "stop");
+    expect(last?.delegation).toEqual({ run_id: runId, tool_call_id: launchId });
+    expect(last?.sequence.previous_response_id).toBe("child-first-response");
+    const output = "Verified both files";
+    childBranch.push({ type: "message", id: "child-final", message: {
+      role: "assistant", responseId: "child-final-response", stopReason: "stop", content: [{ type: "text", text: output }],
+    } });
+    writeSession(childFile, childHeader, childBranch);
+    writeStatus("complete");
+    h.hooks.get("agent_end")!({ messages: childBranch.map((entry) => entry.message).filter(Boolean) }, childContext);
+    expect(childBranch.filter((entry) => entry.customType === PI_RUN_COMPLETION_ENTRY).map((entry) => entry.data)).toEqual([
+      { version: 1, runId, sessionId: childId, responseId: "child-final-response" },
+    ]);
+    writeSession(childFile, childHeader, childBranch);
+
+    delete process.env.PI_SUBAGENT_CHILD;
+    delete process.env.PI_SUBAGENT_RUNNER_PID;
+    delete process.env.PI_SUBAGENT_PARENT_SESSION;
+    process.argv = [process.execPath, join(h.root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js")];
+    const notice = {
+      type: "custom_message", id: "child-notice", customType: "subagent-notify",
+      details: { runs: [{ runId, status: "completed", agent: "worker", asyncDir, sessionLabel: "Session file", sessionValue: childFile }] },
+      content: `Background task completed: **worker**\n\nworker:\n${output}\n\nRetention-managed async directory: ${asyncDir}\n\nSession file: ${childFile}\n\nParent action: Review the result`,
+    };
+    parentBranch.push(notice);
+    writeSession(parentFile, parentHeader, parentBranch);
+    const parentContext = h.sessionContext(parentId);
+    h.appendFor(parentId);
+    h.hooks.get("session_start")!({ reason: "startup" }, parentContext);
+    const headers = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers }, parentContext);
+    const delivered = `<pi_subagents_notice type="subagent-notify" origin="automated message from the pi-subagents extension, not typed by the user">\n${notice.content}\n</pi_subagents_notice>`;
+    const consumer = await dispatchPiMetadata(h, headers, [{ role: "user", content: [{ type: "text", text: delivered }] }], "parent-consumer");
+    const dependency = { session_id: `pi:session:${childId}`, response_id: "child-final-response", run_id: runId };
+    expect(consumer?.depends_on).toEqual([dependency]);
+    expect(consumer?.sequence.previous_response_id).toBe("inspect-response-3");
+    parentBranch.push({ type: "message", id: "consumer-entry", message: {
+      role: "assistant", responseId: "parent-consumer", stopReason: "stop", content: [],
+    } });
+    h.hooks.get("agent_end")!({ messages: parentBranch.map((entry) => entry.message).filter(Boolean) }, parentContext);
+    expect(parentBranch.filter((entry) => entry.customType === PI_RESULT_CONSUMPTION_ENTRY).map((entry) => entry.data.dependencies)).toEqual([[dependency]]);
+  });
+
   test("resolves only the exact pinned long background preview through the registered provider", async () => {
     const h = await createHarness();
     const fixture = backgroundPreviewFixture;

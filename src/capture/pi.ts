@@ -504,31 +504,10 @@ export function readPiParentToolCallId(
     const stat = fstatSync(fd);
     if (stat.size <= 0 || stat.size > 8 * 1024 * 1024) return null;
     const buffer = Buffer.alloc(stat.size);
-    readSync(fd, buffer, 0, buffer.length, 0);
-    const toolResults: string[] = [];
-    const subagentCalls: string[] = [];
-    for (const line of buffer.toString("utf8").split("\n")) {
-      if (!line) continue;
-      let entry: SessionEntryLike;
-      try { entry = JSON.parse(line) as SessionEntryLike; } catch { return null; }
-      const message = (entry.message && typeof entry.message === "object" ? entry.message : entry) as SessionEntryLike;
-      if (message.role === "toolResult") {
-        const details = message.details as { runId?: unknown } | undefined;
-        if (details?.runId === runId && isNativeId(message.toolCallId)) toolResults.push(message.toolCallId);
-      }
-      if (message.role === "assistant" && Array.isArray(message.content)) {
-        for (const part of message.content as Array<{ type?: unknown; id?: unknown; name?: unknown }>) {
-          if ((part.type === "toolCall" || part.type === "tool_call") && part.name === "subagent" && isNativeId(part.id)) {
-            subagentCalls.push(part.id);
-          }
-        }
-      }
-    }
-    const results = [...new Set(toolResults)];
-    const candidate = preferredToolCallId ?? (toolResults.length === 1 ? toolResults[0] : undefined);
-    if (!candidate || !isNativeId(candidate) || subagentCalls.filter((id) => id === candidate).length !== 1) return null;
-    if (toolResults.length > 1 || results.length === 1 && results[0] !== candidate) return null;
-    return candidate;
+    if (readSync(fd, buffer, 0, buffer.length, 0) !== buffer.length) return null;
+    const branch = buffer.toString("utf8").split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line) as SessionEntryLike);
+    return readPiParentToolCallIdFromBranch(branch, runId, preferredToolCallId);
   } catch {
     return null;
   } finally {
@@ -542,24 +521,34 @@ function readPiParentToolCallIdFromBranch(
   preferredToolCallId?: string,
 ): string | null {
   if (!isNativeId(runId)) return null;
-  const results = branch.flatMap((entry) => {
-    const message = (entry.message && typeof entry.message === "object" ? entry.message : entry) as SessionEntryLike;
-    const details = message.details as { runId?: unknown } | undefined;
-    return message.role === "toolResult" && details?.runId === runId && isNativeId(message.toolCallId) ? [message.toolCallId] : [];
-  });
-  const resultIds = [...new Set(results)];
-  if (resultIds.length > 1) return null;
-  const candidate = preferredToolCallId ?? resultIds[0];
-  if (!candidate || !isNativeId(candidate) || resultIds.length === 1 && resultIds[0] !== candidate) return null;
-  let matches = 0;
+  const calls = new Map<string, { count: number; observation: boolean }>();
   for (const entry of branch) {
     const message = (entry.message && typeof entry.message === "object" ? entry.message : entry) as SessionEntryLike;
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const part of message.content as Array<{ type?: unknown; id?: unknown; name?: unknown }>) {
-      if ((part.type === "toolCall" || part.type === "tool_call") && part.name === "subagent" && part.id === candidate) matches += 1;
+    for (const part of message.content as Array<{ type?: unknown; id?: unknown; name?: unknown; arguments?: { action?: unknown } }>) {
+      if ((part.type !== "toolCall" && part.type !== "tool_call") || part.name !== "subagent" || !isNativeId(part.id)) continue;
+      calls.set(part.id, {
+        count: (calls.get(part.id)?.count ?? 0) + 1,
+        observation: part.arguments?.action === "status" || part.arguments?.action === "debug.run",
+      });
     }
   }
-  return matches === 1 ? candidate : null;
+  const results: string[] = [];
+  for (const entry of branch) {
+    const message = (entry.message && typeof entry.message === "object" ? entry.message : entry) as SessionEntryLike;
+    const details = message.details as { runId?: unknown } | undefined;
+    if (message.role !== "toolResult" || details?.runId !== runId || !isNativeId(message.toolCallId)) continue;
+    const call = calls.get(message.toolCallId);
+    // Status snapshots name the run they inspect; their own call is not its launch.
+    // Resume and unfamiliar actions remain launch candidates, retaining conflict checks.
+    if (call?.count === 1 && call.observation) continue;
+    results.push(message.toolCallId);
+  }
+  if (results.length > 1) return null;
+  const candidate = preferredToolCallId ?? results[0];
+  if (!candidate || !isNativeId(candidate) || results.length === 1 && results[0] !== candidate) return null;
+  const source = calls.get(candidate);
+  return source?.count === 1 && !source.observation ? candidate : null;
 }
 
 /** Resolve the pinned runner's config suffix, used only as a locator for its status artifact. */
