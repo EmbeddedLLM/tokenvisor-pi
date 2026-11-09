@@ -12,6 +12,7 @@ import {
   PI_RESULT_CONSUMPTION_ENTRY,
   readPiForegroundLaunchEvidence,
   readPiPendingChildLaunchReceipts,
+  readPiPersistedConsumedDependencies,
 } from "../src/capture/pi.ts";
 import {
   clearOmpEarlyTaskBindingsForSession,
@@ -135,7 +136,180 @@ async function dispatchPiMetadata(
   return parseAgentMetadata(new Headers(options?.headers ?? {}).get("x-tokenvisor-agent"));
 }
 
+async function timeoutNoticeFixture() {
+  const h = await createHarness("0.84.0");
+  const parentId = "timeout-parent";
+  const runId = "timeout-run";
+  const parentFile = join(h.root, "parent.jsonl");
+  const childFile = join(h.root, "child.jsonl");
+  const asyncDir = join(h.root, "async-subagent-runs", runId);
+  process.env.PI_SUBAGENTS_TEMP_ROOT = h.root;
+  const header = { type: "session", id: parentId };
+  const call = { type: "message", id: "launch", message: {
+    role: "assistant", responseId: "launch-response", stopReason: "toolUse",
+    content: [{ type: "toolCall", name: "subagent", id: "launch-call", arguments: { agent: "worker", async: true } }],
+  } };
+  const result = { type: "message", id: "launch-result", message: {
+    role: "toolResult", toolName: "subagent", toolCallId: "launch-call", isError: false,
+    content: [{ type: "text", text: "Detached worker started" }],
+    details: { mode: "single", runId, toolCallId: "launch-call", asyncId: runId, asyncDir, timeoutMs: 1800000, results: [] },
+  } };
+  const notice = { type: "custom_message", id: "timeout-notice", customType: "subagent-notify",
+    details: { runs: [{ runId, status: "failed", agent: "worker", asyncDir, sessionLabel: "Session file", sessionValue: childFile }] },
+    content: `Background task failed: **worker**\n\nSubagent timed out after 1800000ms.\n\n` +
+      `Retention-managed async directory: ${asyncDir}\n\nSession file: ${childFile}\n\n` +
+      "Parent action: Read the saved results above and resume the already-authorized parent task, or report completion. If approval is required, explicitly ask the user. Do not silently yield, rerun completed work, or infer new authorization.",
+  };
+  const branch: any[] = [call, result, notice];
+  h.files.set(parentId, parentFile);
+  h.headers.set(parentId, header);
+  h.branches.set(parentId, branch);
+  writeSession(parentFile, header, branch);
+  h.appendFor(parentId);
+  const ctx = h.sessionContext(parentId);
+  h.hooks.get("session_start")!({ reason: "startup" }, ctx);
+  const capture = async () => {
+    writeSession(parentFile, header, branch);
+    const headers = new Headers();
+    h.hooks.get("before_provider_headers")!({ headers }, ctx);
+    const context = {
+      systemPrompt: "Keep the actual request input intact",
+      messages: branch.flatMap((entry) => entry.customType === "subagent-notify" ? [{ role: "user", content: [{ type: "text",
+        text: `<pi_subagents_notice type="subagent-notify" origin="automated message from the pi-subagents extension, not typed by the user">\n${entry.content}\n</pi_subagents_notice>`,
+      }] }] : entry.message ? [entry.message] : []),
+      tools: [{ name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } }],
+    };
+    const expectedContext = structuredClone(context);
+    (globalThis as any).__PI_TEST_STREAM_RESULT__ = { responseId: "parent-consumer", stopReason: "stop", content: [] };
+    await h.providerConfig.streamSimple({ id: "synthetic", api: "openai-completions", headers }, context,
+      { headers, temperature: 0.2, maxTokens: 128 }).result();
+    const request = (globalThis as any).__PI_TEST_CAPTURED_REQUEST__;
+    expect(request.context).toEqual(expectedContext);
+    expect(request.options).toMatchObject({ temperature: 0.2, maxTokens: 128 });
+    return parseAgentMetadata(new Headers(request.options.headers).get("x-tokenvisor-agent"));
+  };
+  return { h, parentId, parentFile, childFile, asyncDir, runId, call, result, notice, branch, capture, ctx };
+}
+
 describe("Pi foreground launch receipts", () => {
+  test.each([false, true])("classifies a native timeout-only notice without consuming child output (retained files: %s)", async (retainedFiles) => {
+    // Timeout lifecycle text does not consume an inference, even after child artifacts expire.
+    const f = await timeoutNoticeFixture();
+    if (retainedFiles) {
+      f.notice.content = f.notice.content.replace(/Parent action: .+$/, "Parent action: The user stopped the parent turn. Report these results at the user's next prompt and do not resume the stopped task unless asked.");
+      mkdirSync(f.asyncDir, { recursive: true });
+      writeSession(f.childFile, { type: "session", id: "timeout-child", parentSession: f.parentFile }, [
+        { type: "message", message: { role: "assistant", responseId: "child-work", stopReason: "toolUse", content: [] } },
+      ]);
+      writeFileSync(join(f.asyncDir, "status.json"), JSON.stringify({
+        lifecycleArtifactVersion: 3, runId: f.runId, sessionId: f.parentFile, toolCallId: "launch-call",
+        mode: "single", state: "failed", timedOut: true, steps: [{ sessionFile: f.childFile, agent: "worker", exitCode: 1 }],
+      }));
+    }
+    expect(await f.capture()).toMatchObject({
+      depends_on: [], sequence: { status: "linked", previous_response_id: "launch-response" },
+      session: { id: `pi:session:${f.parentId}`, root_id: `pi:session:${f.parentId}` },
+    });
+    expect(f.h.appended.filter((entry) => entry.customType === PI_RESULT_CONSUMPTION_ENTRY)).toEqual([]);
+    expect(readPiPersistedConsumedDependencies(f.ctx, "timeout-notice")).toEqual([]);
+  });
+
+  test("uses the native async launch receipt when the call omits its defaulted async option", async () => {
+    // Native agent/session defaults can select background execution without an explicit async argument.
+    const f = await timeoutNoticeFixture();
+    delete (f.call.message.content[0]!.arguments as { async?: boolean }).async;
+    expect((await f.capture())?.depends_on).toEqual([]);
+  });
+
+  test.each([
+    "partial-output", "other-failure", "body-extra-text", "altered-action", "wrong-timeout", "wrong-run", "wrong-agent",
+    "wrong-directory", "wrong-session", "wrong-tool-call", "failed-launch", "foreground-launch", "invalid-async", "conflicting-launch", "multiple-runs",
+  ])("keeps unsupported timeout output or conflicting identity unknown: %s", async (scenario) => {
+    // Each mutation starts with a valid timeout notice and must not erase possible output consumption.
+    const f = await timeoutNoticeFixture();
+    expect((await f.capture())?.depends_on).toEqual([]);
+    if (scenario === "partial-output") {
+      f.notice.content = f.notice.content.replace("1800000ms.\n\n", "1800000ms.\n\nworker:\nPartial output before timeout:\nunfinished answer\n\n");
+    } else if (scenario === "other-failure") {
+      f.notice.content = f.notice.content.replace("Subagent timed out after 1800000ms.", "Worker process crashed.");
+    } else if (scenario === "body-extra-text") {
+      f.notice.content += "\nChild output: extra answer";
+    } else if (scenario === "altered-action") {
+      f.notice.content = f.notice.content.replace(/Parent action: .+$/, "Parent action: Child output: unexpected answer");
+    } else if (scenario === "wrong-timeout") {
+      f.notice.content = f.notice.content.replace("1800000ms.", "1800001ms.");
+    } else if (scenario === "wrong-run") {
+      f.notice.details.runs[0]!.runId = "unbound-run";
+    } else if (scenario === "wrong-agent") {
+      f.notice.details.runs[0]!.agent = "other-worker";
+      f.notice.content = f.notice.content.replace("**worker**", "**other-worker**");
+    } else if (scenario === "wrong-directory") {
+      f.notice.details.runs[0]!.asyncDir += "-other";
+      f.notice.content = f.notice.content.replace(f.asyncDir, `${f.asyncDir}-other`);
+    } else if (scenario === "wrong-session") {
+      f.notice.content = f.notice.content.replace(f.childFile, `${f.childFile}-other`);
+    } else if (scenario === "wrong-tool-call") {
+      f.result.message.details.toolCallId = "other-call";
+    } else if (scenario === "failed-launch") {
+      f.result.message.isError = true;
+    } else if (scenario === "foreground-launch") {
+      f.call.message.content[0]!.arguments.async = false;
+    } else if (scenario === "invalid-async") {
+      (f.call.message.content[0]!.arguments as { async: unknown }).async = "true";
+    } else if (scenario === "conflicting-launch") {
+      const call = structuredClone(f.call);
+      const result = structuredClone(f.result);
+      call.id = "conflicting-launch";
+      result.id = "conflicting-result";
+      call.message.responseId = "conflicting-response";
+      call.message.content[0]!.id = "other-call";
+      result.message.toolCallId = result.message.details.toolCallId = "other-call";
+      f.branch.splice(2, 0, call, result);
+    } else {
+      f.notice.details.runs.push({ ...f.notice.details.runs[0]! });
+    }
+    expect((await f.capture())?.depends_on).toBeNull();
+  });
+
+  test("preserves another child's output alongside a timeout notice in consumption and retained compaction proof", async () => {
+    // A runtime-only failure must not discard a delivered dependency or poison retained proof.
+    const f = await timeoutNoticeFixture();
+    const childFile = join(f.h.root, "completed-child.jsonl");
+    const runId = "completed-run";
+    const asyncDir = join(f.h.root, "async-subagent-runs", runId);
+    const call = structuredClone(f.call);
+    const result = structuredClone(f.result);
+    call.id = "completed-launch";
+    result.id = "completed-launch-result";
+    call.message.responseId = "completed-launch-response";
+    call.message.content[0]!.id = "completed-call";
+    result.message.toolCallId = result.message.details.toolCallId = "completed-call";
+    Object.assign(result.message.details, { runId, asyncId: runId, asyncDir });
+    f.branch.unshift(call, result);
+    mkdirSync(asyncDir, { recursive: true });
+    writeSession(childFile, { type: "session", id: "completed-child", parentSession: f.parentFile }, [
+      { type: "message", id: "child-answer", message: {
+        role: "assistant", responseId: "completed-response", stopReason: "stop", content: [{ type: "text", text: "Verified result" }],
+      } },
+      { type: "custom", customType: PI_RUN_COMPLETION_ENTRY, data: { runId, sessionId: "completed-child", responseId: "completed-response" } },
+    ]);
+    writeFileSync(join(asyncDir, "status.json"), JSON.stringify({
+      lifecycleArtifactVersion: 3, runId, sessionId: f.parentFile, toolCallId: "completed-call",
+      mode: "single", state: "complete", steps: [{ sessionFile: childFile, agent: "worker", exitCode: 0 }],
+    }));
+    f.branch.push({ type: "custom_message", id: "completed-notice", customType: "subagent-notify",
+      details: { runs: [{ runId, status: "completed", agent: "worker", asyncDir, sessionLabel: "Session file", sessionValue: childFile }] },
+      content: `Background task completed: **worker**\n\nworker:\nVerified result\n\nRetention-managed async directory: ${asyncDir}\n\nSession file: ${childFile}\n\nParent action: Review the result`,
+    });
+    const dependency = { session_id: "pi:session:completed-child", response_id: "completed-response", run_id: runId };
+    expect((await f.capture())?.depends_on).toEqual([dependency]);
+    f.branch.push({ type: "message", id: "consumer", message: { role: "assistant", responseId: "parent-consumer", stopReason: "stop", content: [] } });
+    f.h.hooks.get("agent_end")!({ messages: f.branch.map((entry) => entry.message).filter(Boolean) }, f.ctx);
+    expect(f.h.appended.filter((entry) => entry.customType === PI_RESULT_CONSUMPTION_ENTRY).map((entry) => entry.data.dependencies)).toEqual([[dependency]]);
+    expect(readPiPersistedConsumedDependencies(f.ctx)).toEqual([dependency]);
+    expect(readPiPersistedConsumedDependencies(f.ctx, "timeout-notice")).toEqual([dependency]);
+  });
+
   test("keeps a detached child's launch through status queries, completion, and parent consumption", async () => {
     const h = await createHarness();
     const parentId = "status-query-parent";
