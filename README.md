@@ -51,6 +51,8 @@ If you installed from a local development path, first remove that registration. 
 
 Restart Pi or OMP after installing or updating, then select a TokenVisor model with `/model`. These commands install the TokenVisor provider into your existing Pi/OMP installations.
 
+To verify the installed release, run `omp plugin list`, or use `pi list` to locate Pi's package checkout and read its `package.json` version. New captured requests report the same package version in `source.extension_version`. Already-running sessions keep their loaded code until restarted; the metadata envelope's `version` remains `1` independently of package releases.
+
 ## Agent metadata
 
 On supported runtimes, the extension automatically attaches a bounded `X-TokenVisor-Agent` envelope to TokenVisor provider calls. The envelope contains session, stream, sequence, delegation, and dependency identifiers; it never contains prompts or tool output. Transport retries reuse the same envelope. There is no capture enable/disable setting.

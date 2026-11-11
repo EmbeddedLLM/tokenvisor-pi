@@ -1,5 +1,7 @@
 import { randomUUID } from "crypto";
+import packageInfo from "../../package.json" with { type: "json" };
 
+export const EXTENSION_VERSION = packageInfo.version;
 export const AGENT_HEADER = "X-TokenVisor-Agent";
 export const AGENT_HEADER_BUDGET = 4096;
 export const MAX_AGENT_DEPENDENCIES = 8;
