@@ -12,7 +12,9 @@ export function createCaptureWarningReporter(): CaptureWarningReporter {
       if (codes.has(code)) return;
       codes.add(code);
       reported.set(sessionId, codes);
-      const message = `[tokenvisor] Capture observed ${issue}; request linkage may be incomplete.`;
+      const message = code === "request-sequence"
+        ? "[tokenvisor] Previous-request identity is unavailable for this request. Trace reconstruction may contain a sequence gap; export eligibility is checked separately."
+        : `[tokenvisor] Capture observed ${issue}; request linkage may be incomplete.`;
       try {
         sink(message);
       } catch {

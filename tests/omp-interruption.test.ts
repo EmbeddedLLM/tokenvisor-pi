@@ -207,7 +207,7 @@ describe("OMP interrupted judge sequence recovery", () => {
       expect(calls[1].context.messages).toEqual(originalMessages);
       expect(nextMetadata?.sequence).toEqual({ status: "linked", previous_response_id: "chatcmpl-omp-aborted" });
       expect(warnings.filter((message) => message.includes("request dependency linkage could not be established"))).toHaveLength(1);
-      expect(warnings.filter((message) => message.includes("native request sequence could not be established"))).toHaveLength(1);
+      expect(warnings.filter((message) => message === "[tokenvisor] Previous-request identity is unavailable for this request. Trace reconstruction may contain a sequence gap; export eligibility is checked separately.")).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
       process.argv = originalArgv;
