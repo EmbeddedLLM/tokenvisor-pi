@@ -1,6 +1,6 @@
 {
   "name": "tokenvisor-pi",
-  "version": "1.1.0-dev",
+  "version": "1.1.0",
   "description": "TokenVisor custom provider for pi — dynamic model discovery from devstudio.tokenvisor.ai",
   "keywords": [
     "pi-package",

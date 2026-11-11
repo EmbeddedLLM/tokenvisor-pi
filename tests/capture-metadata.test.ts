@@ -90,6 +90,20 @@ function piContext(overrides: Record<string, unknown> = {}) {
 }
 
 describe("shared agent metadata", () => {
+  test("reports the installed package version in Pi and OMP envelopes", () => {
+    // The package and captured provenance must identify the same installed release.
+    const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
+    const pi = parseAgentMetadata(piEnvelopeForTest(piContext(), ids.stream));
+    const omp = parseAgentMetadata(createOmpEnvelope({ sessionId: ids.root, messages: [] }, ids.stream));
+    expect(pi?.source.harness).toBe("pi");
+    expect(omp?.source.harness).toBe("omp");
+    expect(pi?.source.extension_version).toBe(manifest.version);
+    expect(omp?.source.extension_version).toBe(manifest.version);
+    expect(lock.version).toBe(manifest.version);
+    expect(lock.packages[""].version).toBe(manifest.version);
+  });
+
   test("matches canonical v1 conformance fixtures through the producer encoder", () => {
     const document = JSON.parse(readFileSync(new URL("../conformance/agent-metadata-v1.json", import.meta.url), "utf8")) as {
       version: number;

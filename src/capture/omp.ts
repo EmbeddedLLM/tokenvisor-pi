@@ -1,10 +1,9 @@
-import { encodeAgentMetadata, type AgentMetadata, type MetadataIdentity } from "./shared.ts";
+import { encodeAgentMetadata, EXTENSION_VERSION, type AgentMetadata, type MetadataIdentity } from "./shared.ts";
 import { readNativeSessionHeader, readNativeSessionRootId } from "./native-session.ts";
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from "fs";
 import { dirname, join, basename } from "path";
 import { isDeepStrictEqual } from "util";
 
-export const OMP_EXTENSION_VERSION = "1.1.0-dev";
 export const OMP_RUN_COMPLETION_ENTRY = "tokenvisor-agent-run-completion-v1";
 export const OMP_TASK_RESULT_CONSUMPTION_ENTRY = "tokenvisor-agent-task-result-consumption-v1";
 const PI_FORK_ROOT_ENTRY = "tokenvisor-agent-fork-root-v1";
@@ -1389,7 +1388,7 @@ export function deriveOmpIdentity(
   return {
     harness: "omp",
     harnessVersion,
-    extensionVersion: OMP_EXTENSION_VERSION,
+    extensionVersion: EXTENSION_VERSION,
     runnerVersion: harnessVersion,
     sessionId,
     rootSessionId: options.nativeRootSessionId ?? null,

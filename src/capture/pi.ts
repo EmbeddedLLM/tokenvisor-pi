@@ -6,6 +6,7 @@ import { basename, dirname, join, relative, resolve } from "path";
 import { readNativeSessionHeader, readNativeSessionRootId } from "./native-session.ts";
 import {
   appendPendingChildLaunches,
+  EXTENSION_VERSION,
   isChildLaunchReceipt,
   MAX_CHILD_LAUNCHES_PER_ENVELOPE,
   MAX_PENDING_CHILD_LAUNCHES,
@@ -14,7 +15,6 @@ import {
   type MetadataIdentity,
 } from "./shared.ts";
 
-export const PI_EXTENSION_VERSION = "1.1.0-dev";
 export const PI_COMPACTION_ENTRY = "tokenvisor-agent-compaction-v1";
 export const PI_FORK_ROOT_ENTRY = "tokenvisor-agent-fork-root-v1";
 export const PI_RUN_COMPLETION_ENTRY = "tokenvisor-agent-run-completion-v1";
@@ -2655,7 +2655,7 @@ export function derivePiIdentity(
   return {
     harness: "pi",
     harnessVersion: input.harnessVersion ?? "unknown",
-    extensionVersion: PI_EXTENSION_VERSION,
+    extensionVersion: EXTENSION_VERSION,
     runnerVersion: input.runnerVersion,
     sessionId,
     rootSessionId,
