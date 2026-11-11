@@ -5,11 +5,30 @@ import { tmpdir } from "os";
 import { join } from "path";
 import tokenVisorProvider from "../extensions/tokenvisor-provider.ts";
 import { AGENT_HEADER, parseAgentMetadata } from "../src/capture/shared.ts";
+import { createCaptureWarningReporter } from "../src/capture/warnings.ts";
 
 const tempRoot = mkdtempSync(join(tmpdir(), "tokenvisor-capture-warning-"));
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
 describe("capture limitation warnings", () => {
+  test("explains sequence gaps for both harnesses while preserving independent warnings and deduplication", () => {
+    const reporter = createCaptureWarningReporter();
+    const messages: string[] = [];
+    const sink = (message: string) => { messages.push(message); };
+    const sequenceMessage = "[tokenvisor] Previous-request identity is unavailable for this request. Trace reconstruction may contain a sequence gap; export eligibility is checked separately.";
+    for (const session of ["pi:session:warning-wording", "omp:session:warning-wording"]) {
+      reporter.report(session, "request-sequence", "native request sequence could not be established", sink);
+      reporter.report(session, "request-sequence", "native request sequence could not be established", sink);
+      reporter.report(session, "request-dependencies", "request dependency linkage could not be established", sink);
+    }
+    expect(messages).toEqual([
+      sequenceMessage,
+      "[tokenvisor] Capture observed request dependency linkage could not be established; request linkage may be incomplete.",
+      sequenceMessage,
+      "[tokenvisor] Capture observed request dependency linkage could not be established; request linkage may be incomplete.",
+    ]);
+  });
+
   test("warns once per session and issue for the process lifetime without disabling the provider", async () => {
     if (process.env.TOKENVISOR_CAPTURE_WARNING_CHILD !== "1") {
       const child = spawnSync(process.execPath, ["test", import.meta.filename], {
@@ -20,7 +39,7 @@ describe("capture limitation warnings", () => {
       const output = `${child.stdout}\n${child.stderr}`;
       expect(child.error?.message ?? null).toBeNull();
       expect(child.status, output).toBe(0);
-      expect(output).toContain("2 pass");
+      expect(output).toContain("3 pass");
       return;
     }
 
