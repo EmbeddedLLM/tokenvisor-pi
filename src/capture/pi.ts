@@ -1617,6 +1617,7 @@ export function readPiUnconsumedRunDependencies(
         continue;
       }
       if (run.workflowRunId === undefined) {
+        if (isPiTimeoutOnlyNotification(entry, run, branch.slice(0, entryIndex))) continue;
         if (run.status !== "completed" && run.status !== "failed") {
           unresolved = true;
           continue;
@@ -2040,6 +2041,7 @@ function readPiRetainedNotificationProof(
       }
 
       if (!parentSessionFile) return null;
+      if (isPiTimeoutOnlyNotification(entry, run, branch.slice(0, index))) continue;
       const directOutput = readPiDirectNotificationOutput(entry, run);
       if (directOutput === null) return null;
       if (directOutput.length === 0) continue;
@@ -2176,6 +2178,7 @@ function readPiRetainedDirectDeliveryProof(
     for (const run of runs) {
       if (run.workflowRunId !== undefined) continue;
       if (!isNativeId(run.runId) || (run.status !== "completed" && run.status !== "failed")) continue;
+      if (isPiTimeoutOnlyNotification(entry, run, branch.slice(0, index))) continue;
       const output = readPiDirectNotificationOutput(entry, run);
       if (output === null) return { kind: "ambiguous", dependencies: [], runIds: [] };
       if (output.length > 0) directNotices.push({ index, runId: run.runId });
@@ -2254,6 +2257,43 @@ function piDependencyKey(ref: PiDependencyRef): string {
 function renderPiSubagentsNoticeContext(content: string): string {
   // Preserve the runner's notice boundary without using its version as an identity gate.
   return `<pi_subagents_notice type="subagent-notify" origin="automated message from the pi-subagents extension, not typed by the user">\n${content}\n</pi_subagents_notice>`;
+}
+
+function isPiTimeoutOnlyNotification(
+  entry: SessionEntryLike,
+  run: PiWorkflowNotificationRun,
+  parentBranch: SessionEntryLike[],
+): boolean {
+  const runs = (entry.details as { runs?: unknown[] } | undefined)?.runs;
+  if (runs?.length !== 1 || run.status !== "failed" || run.workflowRunId !== undefined ||
+      run.childRuns !== undefined || run.childOutputs !== undefined || !isNativeId(run.runId) ||
+      typeof run.agent !== "string" || typeof run.asyncDir !== "string" ||
+      run.sessionLabel !== "Session file" || typeof run.sessionValue !== "string" ||
+      !isAbsolutePath(run.sessionValue) || typeof entry.content !== "string") return false;
+  const toolCallId = readPiParentToolCallIdFromBranch(parentBranch, run.runId);
+  if (!toolCallId) return false;
+  const messages = parentBranch.map((item) => (item.message ?? item) as SessionEntryLike);
+  const call = messages.flatMap((message) => message.role === "assistant" && Array.isArray(message.content)
+    ? message.content as Array<{ id?: string; arguments?: { agent?: unknown; async?: unknown } }>
+    : []).find((part) => part.id === toolCallId);
+  const launch = messages.find((message) => message.role === "toolResult" &&
+    message.toolCallId === toolCallId && (message.details as { runId?: unknown } | undefined)?.runId === run.runId);
+  const details = launch?.details as { mode?: unknown; asyncId?: unknown; asyncDir?: unknown; toolCallId?: unknown; timeoutMs?: unknown } | undefined;
+  // An omitted async option can inherit a native default; the launch receipt
+  // must still identify background execution explicitly.
+  if (call?.arguments?.agent !== run.agent ||
+      call.arguments.async !== undefined && call.arguments.async !== true || launch?.isError === true ||
+      details?.mode !== "single" || details.asyncId !== run.runId || details.toolCallId !== toolCallId ||
+      details.asyncDir !== run.asyncDir || typeof details.timeoutMs !== "number" ||
+      !Number.isSafeInteger(details.timeoutMs) || details.timeoutMs <= 0) return false;
+  const action = entry.content.split("\n").at(-1)!;
+  if (action !== "Parent action: Read the saved results above and resume the already-authorized parent task, or report completion. If approval is required, explicitly ask the user. Do not silently yield, rerun completed work, or infer new authorization." &&
+      action !== "Parent action: The user stopped the parent turn. Report these results at the user's next prompt and do not resume the stopped task unless asked.") return false;
+  // The native runner emits only this runtime error when no partial output is
+  // delivered. Parent history suffices; child artifacts may already have expired.
+  return entry.content === `Background task failed: **${run.agent}**\n\n` +
+    `Subagent timed out after ${details.timeoutMs}ms.\n\n` +
+    `Retention-managed async directory: ${run.asyncDir}\n\nSession file: ${run.sessionValue}\n\n${action}`;
 }
 
 function readPiDirectNotificationOutput(
